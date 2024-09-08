@@ -1,0 +1,70 @@
+import { LatLng, type LatLngExpression } from './latlng.js';
+import type { GPXData } from './gpx.js';
+type TouchInfo = {
+    id: number;
+    x: number;
+    y: number;
+    old?: {
+        x: number;
+        y: number;
+    };
+};
+export type MapricornOptions = {
+    container?: HTMLElement;
+    width?: string;
+    height?: string;
+    mapSource?: string;
+    center?: LatLngExpression;
+    zoom?: number;
+};
+export declare class Mapricorn {
+    debug: boolean;
+    container?: HTMLElement;
+    width: string;
+    height: string;
+    canvas?: HTMLCanvasElement;
+    mapSource: string;
+    offScreen?: HTMLCanvasElement;
+    useOffScreen: boolean;
+    gpxData?: GPXData;
+    center: LatLng;
+    zoom: number;
+    zoomMax: number;
+    zoomMin: number;
+    latMax: number;
+    lngMin: number;
+    oldPoint?: {
+        x: number;
+        y: number;
+    };
+    isMoving: boolean;
+    touchMap: Record<number, TouchInfo>;
+    touchList: TouchInfo[];
+    images: HTMLImageElement[];
+    constructor(opts?: MapricornOptions);
+    bind(container: HTMLElement): void;
+    setup(): void;
+    resize(): void;
+    draw(offsetX?: number, offsetY?: number, zoom?: number): void;
+    getMapURL(x: number, y: number, zoom: number): string;
+    setGPXData(gpxData: GPXData, setView?: boolean): void;
+    adjustCenterByGPXData(): void;
+    adjustZoomLevelByGPXData(margin?: number): number | undefined;
+    setMapSource(mapSource: string): void;
+    setView(center: LatLngExpression, zoom?: number): void;
+    setZoom(zoom?: number): void;
+    moveCenter(dx: number, dy: number): void;
+    start({ offsetX: x, offsetY: y }: MouseEvent | Record<string, number>): void;
+    stop(): void;
+    move({ offsetX: x, offsetY: y }: MouseEvent | Record<string, number>): void;
+    handlerResize(): () => void;
+    handlerMouseDown(): (e: MouseEvent) => void;
+    handlerMouseUp(): () => void;
+    handlerMouseMove(): (e: MouseEvent) => void;
+    handlerMouseLeave(): () => void;
+    handlerTouchStart(): (e: TouchEvent) => void;
+    handlerTouchEnd(): (e: TouchEvent) => void;
+    handlerTouchMove(): (e: TouchEvent) => void;
+    handlerMouseWheel(): (e: WheelEvent) => void;
+}
+export {};
