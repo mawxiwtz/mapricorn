@@ -28,12 +28,12 @@ const GPXDataDefault = {
     latMax: NaN,
     lngMin: NaN,
     lngMax: NaN,
-    atiMin: NaN,
-    atiMax: NaN,
+    altMin: NaN,
+    altMax: NaN,
     center: {
       lat: NaN,
       lng: NaN,
-      ati: NaN
+      alt: NaN
     },
     startTime: NaN,
     endTime: NaN,
@@ -77,12 +77,12 @@ class GPX {
     while (element = trkpts.iterateNext()) {
       const lat = document.evaluate("@lat", element, null, XPathResult.NUMBER_TYPE, null);
       const lng = document.evaluate("@lon", element, null, XPathResult.NUMBER_TYPE, null);
-      const ati = document.evaluate(xpathEle, element, null, XPathResult.NUMBER_TYPE, null);
+      const alt = document.evaluate(xpathEle, element, null, XPathResult.NUMBER_TYPE, null);
       const tm = document.evaluate(xpathTime, element, null, XPathResult.STRING_TYPE, null);
       const wpt = {
         lat: lat.numberValue ?? NaN,
         lng: lng.numberValue ?? NaN,
-        ati: ati.numberValue ?? NaN,
+        alt: alt.numberValue ?? NaN,
         time: new Date(tm.stringValue).getTime()
       };
       if (!(s.latMin <= wpt.lat))
@@ -93,17 +93,17 @@ class GPX {
         s.lngMin = wpt.lng;
       if (!(s.lngMax >= wpt.lng))
         s.lngMax = wpt.lng;
-      if (!(s.atiMin <= wpt.ati))
-        s.atiMin = wpt.ati;
-      if (!(s.atiMax >= wpt.ati))
-        s.atiMax = wpt.ati;
+      if (!(s.altMin <= wpt.alt))
+        s.altMin = wpt.alt;
+      if (!(s.altMax >= wpt.alt))
+        s.altMax = wpt.alt;
       if (!(s.startTime <= wpt.time))
         s.startTime = wpt.time;
       if (!(s.endTime >= wpt.time))
         s.endTime = wpt.time;
       s.center.lat = (s.latMax + s.latMin) / 2;
       s.center.lng = (s.lngMax + s.lngMin) / 2;
-      s.center.ati = (s.atiMax + s.atiMin) / 2;
+      s.center.alt = (s.altMax + s.altMin) / 2;
       s.elapsedTime = s.endTime - s.startTime;
       result.wpts.push(wpt);
     }

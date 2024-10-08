@@ -1,7 +1,7 @@
 export type WayPoint = {
     lat: number;
     lng: number;
-    ati: number;
+    alt: number;
     time: number;
 };
 export type GPXData = {
@@ -10,12 +10,12 @@ export type GPXData = {
         latMax: number;
         lngMin: number;
         lngMax: number;
-        atiMin: number;
-        atiMax: number;
+        altMin: number;
+        altMax: number;
         center: {
             lat: number;
             lng: number;
-            ati: number;
+            alt: number;
         };
         startTime: number;
         endTime: number;
