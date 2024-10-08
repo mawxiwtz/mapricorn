@@ -26,13 +26,13 @@ var import_geography = require("./geography.js");
 class Mapricorn {
   debug = false;
   container;
-  width = "640px";
-  height = "480px";
+  width = "";
+  height = "";
   canvas;
   mapSource = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
   //mapSource = '/map/osm/{z}/{x}/{y}.png';
   offScreen;
-  useOffScreen = false;
+  useOffScreen = true;
   gpxData;
   center;
   zoom = 1;
@@ -82,8 +82,12 @@ class Mapricorn {
       return;
     }
     this.container.style.position = "relative";
-    this.container.style.width = this.width;
-    this.container.style.height = this.height;
+    if (this.width) {
+      this.container.style.width = this.width;
+    }
+    if (this.height) {
+      this.container.style.height = this.height;
+    }
     if (!this.canvas) {
       this.canvas = document.createElement("canvas");
       this.container.appendChild(this.canvas);
@@ -201,44 +205,30 @@ class Mapricorn {
         const image = new Image();
         this.images.push(image);
         image.addEventListener("load", () => {
+          const x2 = x * tilePixel + deltax;
+          const y2 = y * tilePixel + deltay;
           if (this.offScreen) {
-            ctx.drawImage(image, x * tilePixel, y * tilePixel, tilePixel, tilePixel);
+            ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
             if (this.debug) {
-              ctx.strokeRect(x * tilePixel, y * tilePixel, tilePixel, tilePixel);
+              ctx.strokeRect(x2, y2, tilePixel, tilePixel);
               ctx.fillText(
                 `${zoom}/${tx}/${ty}`,
-                x * tilePixel + tilePixel / 2,
-                y * tilePixel + tilePixel / 2
+                x2 + tilePixel / 2,
+                y2 + tilePixel / 2
               );
             }
             tiles++;
             if (tiles === tileNum) {
-              context.drawImage(
-                this.offScreen,
-                deltax,
-                deltay
-                /*deltax, deltay*/
-              );
+              context.drawImage(this.offScreen, 0, 0);
             }
           } else {
-            ctx.drawImage(
-              image,
-              x * tilePixel + deltax,
-              y * tilePixel + deltay,
-              tilePixel,
-              tilePixel
-            );
+            ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
             if (this.debug) {
-              ctx.strokeRect(
-                x * tilePixel + deltax,
-                y * tilePixel + deltay,
-                tilePixel,
-                tilePixel
-              );
+              ctx.strokeRect(x2, y2, tilePixel, tilePixel);
               ctx.fillText(
                 `${zoom}/${tx}/${ty}`,
-                x * tilePixel + deltax + tilePixel / 2,
-                y * tilePixel + deltay + tilePixel / 2
+                x2 + tilePixel / 2,
+                y2 + tilePixel / 2
               );
             }
           }
