@@ -123,7 +123,6 @@ class Mapricorn {
     if (this.useOffScreen) {
       if (!this.offScreen) {
         this.offScreen = document.createElement("canvas");
-        console.log("offScreen created");
       }
       this.offScreen.width = rect.width * dpr;
       this.offScreen.height = rect.height * dpr;
@@ -294,7 +293,6 @@ class Mapricorn {
     const wz = Math.round(import_geography.Geography.getZoomByMetersPerPixel(wm / rect.width));
     const hz = Math.round(import_geography.Geography.getZoomByMetersPerPixel(hm / rect.height));
     this.zoom = wz < hz ? wz : hz;
-    console.log(`adjusted zoom level: ${this.zoom}`);
   }
   setMapSource(mapSource) {
     this.mapSource = mapSource;

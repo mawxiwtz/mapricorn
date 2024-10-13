@@ -92,8 +92,8 @@
     }
     // 経緯度をグリニッジ子午線/赤道を原点としたm単位に変換する
     static degrees2meters(lat, lng) {
-      const x = lng * 2003750834e-2 / 180;
-      const y = 6378137 * Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 180 / 2));
+      const x = lng * R * Math.PI / 180;
+      const y = R * Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 180 / 2));
       return { x, y };
     }
     // グリニッジ子午線/赤道を原点としたm単位を経緯度に変換する
@@ -243,7 +243,6 @@
       if (this.useOffScreen) {
         if (!this.offScreen) {
           this.offScreen = document.createElement("canvas");
-          console.log("offScreen created");
         }
         this.offScreen.width = rect.width * dpr;
         this.offScreen.height = rect.height * dpr;
@@ -414,7 +413,6 @@
       const wz = Math.round(Geography.getZoomByMetersPerPixel(wm / rect.width));
       const hz = Math.round(Geography.getZoomByMetersPerPixel(hm / rect.height));
       this.zoom = wz < hz ? wz : hz;
-      console.log(`adjusted zoom level: ${this.zoom}`);
     }
     setMapSource(mapSource) {
       this.mapSource = mapSource;

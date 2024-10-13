@@ -1,5 +1,4 @@
-// 地球の赤道直径(m)
-export const R = 6378137;
+export const R = 6378137; // 地球の赤道半径(m)
 export const TILE_PIXEL = 256; // タイル1辺のピクセル数
 
 export class Geography {
@@ -9,8 +8,8 @@ export class Geography {
 
     // 経緯度をグリニッジ子午線/赤道を原点としたm単位に変換する
     static degrees2meters(lat: number, lng: number) {
-        const x = (lng * 20037508.34) / 180;
-        const y = 6378137 * Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 180 / 2));
+        const x = (lng * R * Math.PI) / 180;
+        const y = R * Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 180 / 2));
         return { x, y };
     }
 

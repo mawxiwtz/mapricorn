@@ -130,7 +130,6 @@ export class Mapricorn {
         if (this.useOffScreen) {
             if (!this.offScreen) {
                 this.offScreen = document.createElement('canvas');
-                console.log('offScreen created');
             }
             this.offScreen.width = rect.width * dpr;
             this.offScreen.height = rect.height * dpr;
@@ -164,10 +163,8 @@ export class Mapricorn {
 
         // Canvasのサイズを取得
         const rect = this.canvas.getBoundingClientRect();
-        //console.log(rect);
 
         const tilePixel = Geography.getTilePixelByZoom(zoom);
-        //console.log(`zoom: ${zoom}, pixel: ${tilePixel}`);
 
         // 複数の座標系があるので注意
         //   経緯度：グリニッジ/赤道を原点とした度数単位。北東方向が正の数値
@@ -178,9 +175,7 @@ export class Mapricorn {
 
         // 中心点（メートル）と中心タイルXYを求める
         const center = Geography.degrees2meters(this.center.lat, this.center.lng);
-        //console.log(`center: ${center.x}/${center.y}`);
         const tile = Geography.meters2tile(center.x, center.y, zoom);
-        //console.log(`tile: ${zoom}/${tile.x}/${tile.y}`);
 
         // 描画開始点のタイルのXYを求める（開始点のLat/Lngがはっきりしている場合）
         //const startTile = Geography.degrees2tile(this.latMax, this.lngMin, zoom);
@@ -194,8 +189,6 @@ export class Mapricorn {
         const world_meter = Geography.tile2meters(tile.x, tile.y, zoom);
         const world = Geography.meter2world(world_meter.x, world_meter.y, zoom);
         const world_center = Geography.meter2world(center.x, center.y, zoom);
-        //console.log(`world: ${world.x}, ${world.y}`);
-        //console.log(`world_center: ${world_center.x}, ${world_center.y}`);
 
         // タイルが必要な範囲を計算する
         // Canvasサイズから、実際に表示可能なタイル数はおのずと決まる
@@ -207,11 +200,9 @@ export class Mapricorn {
         //   dx, dy: 地図の中心点と中心タイル左上隅との差）
         const cx = offsetX ?? rect.width / 2;
         const cy = offsetY ?? rect.height / 2;
-        //console.log(`rect: ${rect.width}x${rect.height}, center: [${cx},${cy}]`);
 
         const dx = world_center.x - world.x;
         const dy = world_center.y - world.y;
-        //console.log(`delta: [${dx},${dy}]`);
 
         // 1. canvasのサイズに応じた必要タイル数とはみ出しピクセル数を求める
         //    「左側はみ出し」と、「フル表示+右側はみ出し」にわけて考える。
@@ -223,7 +214,6 @@ export class Mapricorn {
         const tilexnum = Math.ceil((rect.width - modx) / tilePixel) + (modx > 0 ? 1 : 0);
         const mody = (cy - dy) % tilePixel;
         const tileynum = Math.ceil((rect.height - mody) / tilePixel) + (mody > 0 ? 1 : 0);
-        //console.log(`tiles: ${tilexnum}x${tileynum}, moduler: ${modx},${mody}`);
 
         // 2. Canvasにタイル画像を敷き詰める。
         //      ln + lm + tx + rm + rn
@@ -388,15 +378,12 @@ export class Mapricorn {
         const max = Geography.degrees2meters(s.latMax, s.lngMax);
         const wm = (max.x - min.x) * margin;
         const hm = (max.y - min.y) * margin;
-        //console.log(`width: ${wm}m, ${rect.width}px`);
-        //console.log(`height: ${hm}m, ${rect.height}px`);
 
         // 範囲に収めるためのズームレベル、タイル数を求める
         // 縦横それぞれのズームレベルを計算し、より小さな方を取る
         const wz = Math.round(Geography.getZoomByMetersPerPixel(wm / rect.width));
         const hz = Math.round(Geography.getZoomByMetersPerPixel(hm / rect.height));
         this.zoom = wz < hz ? wz : hz;
-        console.log(`adjusted zoom level: ${this.zoom}`);
     }
 
     setMapSource(mapSource: string) {
