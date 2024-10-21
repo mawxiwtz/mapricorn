@@ -1,8 +1,9 @@
 import { LatLng, type LatLngExpression } from './latlng.js';
 import type { GPXData } from './gpx.js';
 import { Geography } from './geography.js';
+import { Vector2 } from './vector.js';
 
-type TouchInfo = {
+type PointerInfo = {
     id: number;
     x: number;
     y: number;
@@ -19,6 +20,7 @@ export type MapricornOptions = {
     mapSource?: string;
     center?: LatLngExpression;
     zoom?: number;
+    enableRotate?: boolean;
 };
 
 // 地図表示を行うクラス
@@ -27,26 +29,29 @@ export class Mapricorn {
     container?: HTMLElement;
     width = '';
     height = '';
-    canvas?: HTMLCanvasElement;
+    canvas: HTMLCanvasElement;
     mapSource = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
     //mapSource = '/map/osm/{z}/{x}/{y}.png';
-    offScreen?: HTMLCanvasElement;
-    useOffScreen = true;
     gpxData?: GPXData;
     center: LatLng;
-    zoom: number = 1;
+    zoom: number = 2;
     zoomMax = 19;
-    zoomMin = 0;
+    zoomMin = 2;
     latMax: number = 0;
     lngMin: number = 0;
-    oldPoint?: { x: number; y: number };
-    isMoving = false;
-    touchMap: Record<number, TouchInfo> = {};
-    touchList: TouchInfo[] = [];
-    images: HTMLImageElement[] = [];
+    enableRotate: boolean = true;
+
+    _oldPoint?: { x: number; y: number };
+    _isMoving = false;
+    _imageCache: Record<string, HTMLImageElement> = {};
+    _drawing: boolean = false;
+    _pointers: Record<number, PointerInfo> = {};
+    _shiftL = false;
+    _theta = 0;
 
     constructor(opts?: MapricornOptions) {
         this.center = new LatLng([0, 0, 0]);
+        this.canvas = document.createElement('canvas');
         if (opts) {
             if (opts.mapSource) {
                 this.mapSource = opts.mapSource;
@@ -62,6 +67,9 @@ export class Mapricorn {
             }
             if (opts.height) {
                 this.height = opts.height;
+            }
+            if (opts.enableRotate) {
+                this.enableRotate = opts.enableRotate;
             }
             if (opts.container) {
                 this.bind(opts.container);
@@ -91,79 +99,307 @@ export class Mapricorn {
             this.container.style.height = this.height;
         }
 
-        if (!this.canvas) {
-            this.canvas = document.createElement('canvas');
-            this.container.appendChild(this.canvas);
-            this.canvas.style.width = '100%';
-            this.canvas.style.height = '100%';
+        this.canvas = document.createElement('canvas');
+        this.canvas.tabIndex = 0; // enable receive key event on canvas element
+        this.canvas.style.outline = 'none'; // not show outline of canvas when getting focus
+        this.canvas.focus();
+        this.canvas.style.position = 'absolute';
+        this.canvas.style.width = '100%';
+        this.canvas.style.height = '100%';
+        this.container.appendChild(this.canvas);
 
-            const context = this.canvas.getContext('2d');
-            if (!context) {
-                return;
-            }
-            context.lineWidth = 1;
-            context.strokeStyle = '#fff';
+        // disable pinch in-out by browser
+        this.canvas.addEventListener('touchstart', (event) => {
+            event.preventDefault();
+        });
 
-            this.canvas.addEventListener('mousedown', this.handlerMouseDown());
-            this.canvas.addEventListener('mouseup', this.handlerMouseUp());
-            this.canvas.addEventListener('mousemove', this.handlerMouseMove());
-            this.canvas.addEventListener('mouseleave', this.handlerMouseLeave());
-            this.canvas.addEventListener('touchstart', this.handlerTouchStart());
-            this.canvas.addEventListener('touchend', this.handlerTouchEnd());
-            this.canvas.addEventListener('touchmove', this.handlerTouchMove());
-            this.canvas.addEventListener('wheel', this.handlerMouseWheel());
+        this.canvas.addEventListener('pointerdown', this.handlerPointerDown());
+        this.canvas.addEventListener('pointerup', this.handlerPointerUp());
+        this.canvas.addEventListener('pointermove', this.handlerPointerMove());
+        this.canvas.addEventListener('wheel', this.handlerMouseWheel());
 
-            window.addEventListener('resize', this.handlerResize());
-        }
+        this.canvas.addEventListener('keydown', this.handlerKeyDown());
+        this.canvas.addEventListener('keyup', this.handlerKeyUp());
+
+        window.addEventListener('resize', this.handlerResize());
     }
 
     // canvasのリサイズと解像度設定（ぼやけ防止）
     // canvasの各種設定は消える
     resize() {
-        if (!this.canvas) {
-            return;
-        }
         const dpr = window.devicePixelRatio;
-        const rect = this.canvas.getBoundingClientRect();
-        this.canvas.width = rect.width * dpr;
-        this.canvas.height = rect.height * dpr;
-        if (this.useOffScreen) {
-            if (!this.offScreen) {
-                this.offScreen = document.createElement('canvas');
-            }
-            this.offScreen.width = rect.width * dpr;
-            this.offScreen.height = rect.height * dpr;
-        }
+        this.canvas.width = this.canvas.clientWidth * dpr;
+        this.canvas.height = this.canvas.clientHeight * dpr;
 
         const context = this.canvas.getContext('2d');
         if (!context) {
             return;
         }
+        context.restore();
         context.scale(dpr, dpr);
-
-        if (this.offScreen) {
-            const ctx = this.offScreen.getContext('2d');
-            if (!ctx) {
-                return;
-            }
-        }
+        context.save();
 
         this.draw();
     }
 
     // 現在の中心点と新しいズームレベルで地図を描画する
-    // offsetX, offsetYはズームの中心ピクセル（あらかじめmakeCenter()で
+    // offsetX, offsetYはズームの中心ピクセル（あらかじめmoveCenter()で
     // 中心点をこの位置に移動しておくこと。描画後に中心点は表示領域の中心に
     // 再設定される）。省略時はcanvasの中心
     // zoomは新しいズームレベルを指定する。省略時は現在のズームレベル
-    draw(offsetX?: number, offsetY?: number, zoom: number = this.zoom) {
-        if (!this.canvas || (this.useOffScreen && !this.offScreen)) {
+    // easingをfalseにするとズーム変更時もアニメーションしなくなる（ピンチ操作時のUX向上）
+    draw(offsetX?: number, offsetY?: number, zoom: number = this.zoom, easing: boolean = true) {
+        const ease = (func: (progress: number) => void, duration: number, endFunc: () => void) => {
+            let start = -1;
+            const handler = { id: 0 };
+            const loop = (tic: number) => {
+                if (start < 0) start = tic;
+                const progress = (tic - start) / duration;
+                func(progress);
+                if (progress < 1) {
+                    handler.id = requestAnimationFrame(loop);
+                } else {
+                    endFunc();
+                }
+            };
+            handler.id = requestAnimationFrame(loop);
+            return handler;
+        };
+
+        const end = () => {
+            // 新しいズームを反映する
+            this.zoom = zoom;
+
+            // this.draw()やthis.moveCenter()をアンロックする
+            this._drawing = false;
+
+            // ホイールアクションの場合、中心点がポインタの位置となるため
+            // 中心点と実際の表示の中心がずれる。そのためズーム変更後の新たな
+            // 中心点を計算し、設定する
+            if (offsetX !== undefined && offsetY !== undefined) {
+                const rx = this.canvas.clientWidth / 2 - offsetX;
+                const ry = this.canvas.clientHeight / 2 - offsetY;
+                this.moveCenter(rx, ry);
+            }
+        };
+
+        if (this._drawing) {
             return;
         }
 
-        // Canvasのサイズを取得
-        const rect = this.canvas.getBoundingClientRect();
+        // this.draw()およびthis.moveCenter()をロックする
+        this._drawing = true;
 
+        if (!easing || zoom == this.zoom) {
+            this.draw2d(this.canvas, this.center, zoom, 1, offsetX, offsetY);
+            end();
+        } else {
+            // ズーム倍率変更をイージングつきで行う
+            const sign = zoom > this.zoom ? 1 : -1;
+
+            // アニメーションでイージング用キャンバスのサイズと透明度を変更する。
+            ease(
+                (progress: number) => {
+                    if (progress > 1) progress = 1;
+                    // 変化前の描画
+                    this.draw2d(
+                        this.canvas,
+                        this.center,
+                        this.zoom + sign * progress,
+                        1,
+                        offsetX,
+                        offsetY,
+                    );
+                },
+                300,
+                end,
+            );
+        }
+    }
+
+    draw2d(
+        canvas: HTMLCanvasElement,
+        center: LatLng,
+        zoom: number,
+        alpha: number = 1,
+        offsetX?: number,
+        offsetY?: number,
+    ) {
+        // 複数の座標系を扱うためそれぞれの違いに注意
+        //   経緯度：グリニッジ/赤道を原点とした度数単位。北東方向が正の数値
+        //   メートル座標：グリニッジ/赤道を原点としたメートル単位。北東方向が正の数値
+        //   タイルXY；グリニッジ/北極を原点としたタイル番号。南東方向が正の数値
+        //   ワールド座標：グリニッジ/赤道を原点としたピクセル単位。南東方向が正の数値
+        //   Canvas座標：画面のcanvasタグ領域の左上隅を原点としたピクセル単位。南東方向が正の数値
+
+        // canvasのサイズ
+        const w = canvas.clientWidth;
+        const h = canvas.clientHeight;
+
+        // zoomの中心点の「canvas上のオフセット」を求める
+        // ホイールアクションやピンチイン/アウト時はcanvasの中心とは限らないことに注意する
+        const cx = offsetX ?? w / 2;
+        const cy = offsetY ?? h / 2;
+
+        // canvasの表示範囲のメートル座標
+        // zoomレベルでのcanvas四隅のメートル座標（zoomの中心点で逆回転させておく）
+        const pa = new Vector2(-cx, -cy).rotate(-this._theta);
+        const pb = new Vector2(w - cx, -cy).rotate(-this._theta);
+        const pc = new Vector2(w - cx, h - cy).rotate(-this._theta);
+        const pd = new Vector2(-cx, h - cy).rotate(-this._theta);
+
+        // zoom中心点のメートル座標
+        const center_meter = Geography.degrees2meters(center.lat, center.lng);
+
+        // 1ピクセル当たりのメートル
+        const mpp = Geography.getMetersPerPixelByZoom(zoom);
+
+        // 四隅それぞれのメートル座標
+        const pma = new Vector2(center_meter.x + pa.x * mpp, center_meter.y - pa.y * mpp);
+        const pmb = new Vector2(center_meter.x + pb.x * mpp, center_meter.y - pb.y * mpp);
+        const pmc = new Vector2(center_meter.x + pc.x * mpp, center_meter.y - pc.y * mpp);
+        const pmd = new Vector2(center_meter.x + pd.x * mpp, center_meter.y - pd.y * mpp);
+        const vab = pmb.clone().sub(pma);
+        const vbc = pmc.clone().sub(pmb);
+        const vcd = pmd.clone().sub(pmc);
+        const vda = pma.clone().sub(pmd);
+
+        // 四隅それぞれのタイル座標
+        const ta = Geography.meters2tile(pma.x, pma.y, zoom);
+        const tb = Geography.meters2tile(pmb.x, pmb.y, zoom);
+        const tc = Geography.meters2tile(pmc.x, pmc.y, zoom);
+        const td = Geography.meters2tile(pmd.x, pmd.y, zoom);
+
+        // 四隅のタイル座標がすべて収まるタイル範囲
+        let minX = Infinity,
+            minY = Infinity;
+        let maxX = -Infinity,
+            maxY = -Infinity;
+        [ta, tb, tc, td].forEach((tile) => {
+            if (tile.x < minX) minX = tile.x;
+            if (tile.y < minY) minY = tile.y;
+            if (tile.x > maxX) maxX = tile.x;
+            if (tile.y > maxY) maxY = tile.y;
+        });
+
+        // canvasコンテキストの準備
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+            return;
+        }
+        ctx.restore();
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(cx, cy);
+        ctx.rotate(this._theta);
+
+        if (this.debug) {
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = '#f00';
+            ctx.fillStyle = 'red';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = '26px Arial';
+        }
+
+        // 中心点のワールド座標
+        const world_center = Geography.meter2world(center_meter.x, center_meter.y, zoom);
+        // 中心点のあるタイル
+        const tile = Geography.meters2tile(center_meter.x, center_meter.y, zoom);
+        const world_meter = Geography.tile2meters(tile.x, tile.y, zoom);
+        const world = Geography.meter2world(world_meter.x, world_meter.y, zoom);
+        // 中心点のあるタイルにおける中心点の相対ワールド座標（南東方向が正）
+        const deltax = world_center.x - world.x;
+        const deltay = world_center.y - world.y;
+
+        // タイル一辺のピクセル数
+        const tilePixel = Geography.getTilePixelByZoom(zoom);
+
+        // タイル範囲内で表示範囲内にあるタイルを描画
+        const tlenx = maxX - minX + 1;
+        const tleny = maxY - minY + 1;
+        const disparray: boolean[][] = [...Array(tleny)].map(() => [...Array(tlenx)].fill(false));
+        for (let iy = 0; iy < tleny; iy++) {
+            for (let ix = 0; ix < tlenx; ix++) {
+                // タイル左上隅頂点のメートル座標
+                const p = Geography.tile2meters(ix + minX, iy + minY, zoom);
+                const point = new Vector2(p.x, p.y);
+                const vap = point.clone().sub(pma);
+                const vbp = point.clone().sub(pmb);
+                const vcp = point.clone().sub(pmc);
+                const vdp = point.clone().sub(pmd);
+
+                // pointとcanvas表示範囲の四辺との各外積がすべて負ならばpointは表示範囲内
+                const crosses =
+                    vab.cross(vap) < 0 &&
+                    vbc.cross(vbp) < 0 &&
+                    vcd.cross(vcp) < 0 &&
+                    vda.cross(vdp) < 0;
+
+                disparray[iy][ix] = crosses;
+                if (crosses) {
+                    if (iy > 0) {
+                        disparray[iy - 1][ix] = true;
+                    }
+                    if (ix > 0) {
+                        disparray[iy][ix - 1] = true;
+                    }
+                    if (iy > 0 && ix > 0) {
+                        disparray[iy - 1][ix - 1] = true;
+                    }
+                }
+            }
+        }
+
+        for (let iy = 0; iy < tleny; iy++) {
+            for (let ix = 0; ix < tlenx; ix++) {
+                if (disparray[iy][ix]) {
+                    // 描画
+                    const tx = minX + ix;
+                    const ty = minY + iy;
+                    const x2 = (tx - tile.x) * tilePixel - deltax; // - cx;
+                    const y2 = (ty - tile.y) * tilePixel - deltay; // - cy;
+
+                    const url = this.getMapURL(tx, ty, zoom);
+                    let image: HTMLImageElement;
+                    if (url in this._imageCache) {
+                        image = this._imageCache[url];
+                        ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
+                    } else {
+                        image = new Image(tilePixel, tilePixel);
+                        image.src = url;
+                        //ctx.fillRect(x2, y2, tilePixel, tilePixel);
+                    }
+                    const handler = () => {
+                        // 表示コンテキストに直接描画
+                        ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
+                        image.removeEventListener('load', handler);
+                        this._imageCache[url] = image;
+
+                        // タイルの境界とタイルXYの表示
+                        if (this.debug) {
+                            ctx.strokeRect(x2, y2, tilePixel, tilePixel);
+                            ctx.fillText(
+                                `${zoom}/${tx}/${ty}`,
+                                x2 + tilePixel / 2,
+                                y2 + tilePixel / 2,
+                            );
+                        }
+                    };
+                    image.addEventListener('load', handler);
+                }
+            }
+        }
+    }
+
+    draw2d_(
+        canvas: HTMLCanvasElement,
+        center: LatLng,
+        zoom: number,
+        alpha: number = 1,
+        offsetX?: number,
+        offsetY?: number,
+    ) {
         const tilePixel = Geography.getTilePixelByZoom(zoom);
 
         // 複数の座標系があるので注意
@@ -174,33 +410,33 @@ export class Mapricorn {
         //   Canvas座標：画面のcanvasタグ領域の左上隅を原点としたピクセル単位。南東方向が正の数値
 
         // 中心点（メートル）と中心タイルXYを求める
-        const center = Geography.degrees2meters(this.center.lat, this.center.lng);
-        const tile = Geography.meters2tile(center.x, center.y, zoom);
+        const center_meter = Geography.degrees2meters(center.lat, center.lng);
+        const tile = Geography.meters2tile(center_meter.x, center_meter.y, zoom);
+        const cx = offsetX ?? canvas.clientWidth / 2;
+        const cy = offsetY ?? canvas.clientHeight / 2;
 
         // 描画開始点のタイルのXYを求める（開始点のLat/Lngがはっきりしている場合）
         //const startTile = Geography.degrees2tile(this.latMax, this.lngMin, zoom);
         // 描画開始点のタイルのXYを求める（zoomと表示領域から決める場合）
         const mpp = Geography.getMetersPerPixelByZoom(zoom);
-        const ltx = center.x - (offsetX ?? rect.width / 2) * mpp;
-        const lty = center.y + (offsetY ?? rect.height / 2) * mpp;
+        const ltx = center_meter.x - cx * mpp;
+        const lty = center_meter.y + cy * mpp;
         const startTile = Geography.meters2tile(ltx, lty, zoom);
 
         // ワールド座標の計算
         const world_meter = Geography.tile2meters(tile.x, tile.y, zoom);
         const world = Geography.meter2world(world_meter.x, world_meter.y, zoom);
-        const world_center = Geography.meter2world(center.x, center.y, zoom);
+        const world_center = Geography.meter2world(center_meter.x, center_meter.y, zoom);
 
         // タイルが必要な範囲を計算する
         // Canvasサイズから、実際に表示可能なタイル数はおのずと決まる
-        //   rect: Canvas
+        //   rect: Canvas(px)
+        //   center: Canvasの中心(px)
         //   world: 中心タイル左上隅のワールド座標
         //   world_center: 地図の中心のワールド座標
         //   tpx: タイルの1辺のピクセル数(= 256)
         //   cx, cy: canvas上の中心点（小数点未満は切り捨て）
         //   dx, dy: 地図の中心点と中心タイル左上隅との差）
-        const cx = offsetX ?? rect.width / 2;
-        const cy = offsetY ?? rect.height / 2;
-
         const dx = world_center.x - world.x;
         const dy = world_center.y - world.y;
 
@@ -211,31 +447,31 @@ export class Mapricorn {
         //      tilexnum = modxを除いた部分をカバーするタイル数 + modx分のタイル
         //      高さについても同様に計算
         const modx = (cx - dx) % tilePixel;
-        const tilexnum = Math.ceil((rect.width - modx) / tilePixel) + (modx > 0 ? 1 : 0);
+        const tilexnum = Math.ceil((canvas.clientWidth - modx) / tilePixel) + (modx > 0 ? 1 : 0);
         const mody = (cy - dy) % tilePixel;
-        const tileynum = Math.ceil((rect.height - mody) / tilePixel) + (mody > 0 ? 1 : 0);
+        const tileynum = Math.ceil((canvas.clientHeight - mody) / tilePixel) + (mody > 0 ? 1 : 0);
 
         // 2. Canvasにタイル画像を敷き詰める。
         //      ln + lm + tx + rm + rn
         //      高さについても同様に計算
         //      左上隅から敷いていく
-        const context = this.canvas.getContext('2d');
-        if (!context) {
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
             return;
         }
+        ctx.restore();
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(cx, cy);
+        ctx.rotate(this._theta);
 
-        const ctx = this.offScreen ? this.offScreen.getContext('2d') : context;
-        if (ctx) {
-            if (this.debug) {
-                ctx.lineWidth = 1;
-                ctx.strokeStyle = '#f00';
-                ctx.fillStyle = 'red';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.font = '26px Arial';
-            }
-        } else {
-            return;
+        if (this.debug) {
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = '#f00';
+            ctx.fillStyle = 'red';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = '26px Arial';
         }
 
         // オフスクリーンからcanvasに転送する際のオフセットを計算
@@ -248,74 +484,40 @@ export class Mapricorn {
         const offsetY_meter = lty - startTile_meter.y;
         const deltax = offsetX_meter / mpp;
         const deltay = offsetY_meter / mpp;
+        // ctx.fillStyle = '#ddd';
 
-        const tileNum = tilexnum * tileynum;
-        let tiles = 0;
-        for (const i of this.images) {
-            // cancel image loading
-            i.src = '';
-        }
-        this.images = [];
         for (let x = 0; x < tilexnum; x++) {
             for (let y = 0; y < tileynum; y++) {
                 const tx =
                     startTile.x + x; /* + (modx > 0 ? -1 : 0) // lng指定startTileの場合に必要 */
                 const ty =
                     startTile.y + y; /* + (mody > 0 ? -1 : 0) // lat指定startTileの場合に必要 */
+                const x2 = x * tilePixel + deltax - cx;
+                const y2 = y * tilePixel + deltay - cy;
                 const url = this.getMapURL(tx, ty, zoom);
-                const image = new Image();
-                this.images.push(image);
-                image.addEventListener('load', () => {
-                    const x2 = x * tilePixel + deltax;
-                    const y2 = y * tilePixel + deltay;
-                    if (this.offScreen) {
-                        // オフスクリーンに描画
-                        ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
+                let image: HTMLImageElement;
+                if (url in this._imageCache) {
+                    image = this._imageCache[url];
+                    ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
+                } else {
+                    image = new Image(tilePixel, tilePixel);
+                    image.src = url;
+                    //ctx.fillRect(x2, y2, tilePixel, tilePixel);
+                }
+                const handler = () => {
+                    // 表示コンテキストに直接描画
+                    ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
+                    image.removeEventListener('load', handler);
+                    this._imageCache[url] = image;
 
-                        // タイルの境界とタイルXYの表示
-                        if (this.debug) {
-                            ctx.strokeRect(x2, y2, tilePixel, tilePixel);
-                            ctx.fillText(
-                                `${zoom}/${tx}/${ty}`,
-                                x2 + tilePixel / 2,
-                                y2 + tilePixel / 2,
-                            );
-                        }
-
-                        // オフスクリーンの画像をcanvasに転写する
-                        tiles++;
-                        if (tiles === tileNum) {
-                            context.drawImage(this.offScreen, 0, 0);
-                        }
-                    } else {
-                        // 表示コンテキストに直接描画
-                        ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
-
-                        // タイルの境界とタイルXYの表示
-                        if (this.debug) {
-                            ctx.strokeRect(x2, y2, tilePixel, tilePixel);
-                            ctx.fillText(
-                                `${zoom}/${tx}/${ty}`,
-                                x2 + tilePixel / 2,
-                                y2 + tilePixel / 2,
-                            );
-                        }
+                    // タイルの境界とタイルXYの表示
+                    if (this.debug) {
+                        ctx.strokeRect(x2, y2, tilePixel, tilePixel);
+                        ctx.fillText(`${zoom}/${tx}/${ty}`, x2 + tilePixel / 2, y2 + tilePixel / 2);
                     }
-                });
-                image.src = url;
+                };
+                image.addEventListener('load', handler);
             }
-        }
-
-        // 新しいズームを反映する
-        this.zoom = zoom;
-
-        // ホイールアクションの場合、中心点がポインタの位置となるため
-        // 中心点と実際の表示の中心がずれる。そのためズーム変更後の新たな
-        // 中心点を計算し、設定する
-        if (offsetX !== undefined && offsetY !== undefined) {
-            const rx = rect.width / 2 - offsetX;
-            const ry = rect.height / 2 - offsetY;
-            this.moveCenter(rx, ry);
         }
     }
 
@@ -362,15 +564,9 @@ export class Mapricorn {
 
     // CanvasとGPXデータの範囲で適切なズームレベルを計算して設定する
     adjustZoomLevelByGPXData(margin: number = 1.2): number | undefined {
-        if (!this.canvas) {
-            return;
-        }
         if (!this.gpxData) {
             return undefined;
         }
-
-        // Canvasのサイズを取得
-        const rect = this.canvas.getBoundingClientRect();
 
         // ログの範囲(m)を計算
         const s = this.gpxData.stats;
@@ -381,8 +577,8 @@ export class Mapricorn {
 
         // 範囲に収めるためのズームレベル、タイル数を求める
         // 縦横それぞれのズームレベルを計算し、より小さな方を取る
-        const wz = Math.round(Geography.getZoomByMetersPerPixel(wm / rect.width));
-        const hz = Math.round(Geography.getZoomByMetersPerPixel(hm / rect.height));
+        const wz = Math.round(Geography.getZoomByMetersPerPixel(wm / this.canvas.clientWidth));
+        const hz = Math.round(Geography.getZoomByMetersPerPixel(hm / this.canvas.clientHeight));
         this.zoom = wz < hz ? wz : hz;
     }
 
@@ -405,13 +601,18 @@ export class Mapricorn {
     // 中心点をx,yピクセル分移動する
     // 移動方向は正の数なら南東方向
     moveCenter(dx: number, dy: number) {
+        const dv = new Vector2(dx, dy);
+        dv.rotate(-this._theta);
+        if (this._drawing) {
+            return;
+        }
         const mpp = Geography.getMetersPerPixelByZoom(this.zoom);
 
         // 中心経緯度をメートルに直す
         const center = Geography.degrees2meters(this.center.lat, this.center.lng);
         // ピクセル増分をメートルに変換し、中心経緯度のメートルに加算する
-        center.x += dx * mpp;
-        center.y -= dy * mpp;
+        center.x += dv.x * mpp;
+        center.y -= dv.y * mpp;
         // 中心経緯度のメートルを経緯度に戻す
         const deg = Geography.meters2degrees(center.x, center.y);
 
@@ -435,25 +636,25 @@ export class Mapricorn {
     }
 
     start({ offsetX: x, offsetY: y }: MouseEvent | Record<string, number>) {
-        this.isMoving = true;
-        this.oldPoint = { x, y };
+        this._isMoving = true;
+        this._oldPoint = { x, y };
     }
 
     stop() {
-        this.oldPoint = undefined;
-        this.isMoving = false;
+        this._oldPoint = undefined;
+        this._isMoving = false;
     }
 
     // 指定座標に中心点を移動する
     move({ offsetX: x, offsetY: y }: MouseEvent | Record<string, number>) {
-        if (this.oldPoint) {
+        if (this._oldPoint) {
             // ワールド座標の増分を求めて中心点を移動する
-            const dx = this.oldPoint.x - x;
-            const dy = this.oldPoint.y - y;
+            const dx = this._oldPoint.x - x;
+            const dy = this._oldPoint.y - y;
             this.moveCenter(dx, dy);
         }
 
-        this.oldPoint = { x, y };
+        this._oldPoint = { x, y };
     }
 
     handlerResize() {
@@ -462,205 +663,231 @@ export class Mapricorn {
         };
     }
 
-    handlerMouseDown() {
-        return (e: MouseEvent) => {
-            if (this.canvas) {
+    handlerPointerDown() {
+        return (e: PointerEvent) => {
+            this._pointers[e.pointerId] = {
+                id: e.pointerId,
+                x: e.offsetX,
+                y: e.offsetY,
+            };
+            const element = <HTMLCanvasElement>e.currentTarget;
+            element.setPointerCapture(e.pointerId);
+
+            const pointers = Object.values(this._pointers);
+            if (pointers.length === 1) {
+                // 最初の指ならばタッチ開始
                 this.canvas.style.cursor = 'grab';
+                this.start({
+                    offsetX: pointers[0].x,
+                    offsetY: pointers[0].y,
+                });
             }
-            this.start(e);
         };
     }
 
-    handlerMouseUp() {
-        return () => {
-            this.stop();
-            if (this.canvas) {
+    handlerPointerUp() {
+        return (e: PointerEvent) => {
+            //e.preventDefault();
+
+            const element = <HTMLCanvasElement>e.currentTarget;
+            element.releasePointerCapture(e.pointerId);
+            delete this._pointers[e.pointerId];
+
+            const pointers = Object.values(this._pointers);
+            if (pointers.length === 0) {
+                // 指がすべて離れた
+                this.stop();
                 this.canvas.style.cursor = '';
             }
         };
     }
 
-    handlerMouseMove() {
-        return (e: MouseEvent) => {
-            if (this.isMoving) {
-                if (this.canvas) {
-                    this.canvas.style.cursor = 'grabbing';
-                }
-                this.move(e);
-                this.draw();
-            }
-        };
-    }
-
-    handlerMouseLeave() {
-        return () => {
-            // this.stop();
-        };
-    }
-
-    handlerTouchStart() {
-        return (e: TouchEvent) => {
-            if (!this.canvas) {
-                return;
-            }
-            e.preventDefault();
-            const rect = this.canvas.getBoundingClientRect();
-
-            // タッチ状態を保存
-            const ts = this.touchMap;
-            const len = Object.keys(ts).length;
-            for (let i = 0; i < e.changedTouches.length; i++) {
-                const t = e.changedTouches[i];
-                const v = { id: t.identifier, x: t.pageX - rect.left, y: t.pageY - rect.top };
-                ts[t.identifier] = v;
-            }
-
-            // タッチ状態をタッチ順に配列化
-            this.touchList = Object.values(ts).sort((a, b) => a.id - b.id);
-            if (len === 0) {
-                // 最初の指ならばタッチ開始;
-                this.start({
-                    offsetX: this.touchList[0].x,
-                    offsetY: this.touchList[0].y,
-                });
-            }
-        };
-    }
-
-    handlerTouchEnd() {
-        return (e: TouchEvent) => {
-            if (!this.canvas) {
-                return;
-            }
+    handlerPointerMove() {
+        return (e: PointerEvent) => {
             //e.preventDefault();
 
-            // タッチ状態を保存
-            const ts = this.touchMap;
-            for (let i = 0; i < e.changedTouches.length; i++) {
-                const t = e.changedTouches[i];
-                if (this.touchList.length > 0 && this.touchList[0].id === t.identifier) {
-                    // 一番古い指が離れたならばいったん停止
-                    this.stop();
-                }
-                delete ts[t.identifier];
-            }
-
-            // タッチ状態をタッチ順に配列化
-            this.touchList = Object.values(ts).sort((a, b) => a.id - b.id);
-            if (!this.isMoving && this.touchList.length > 0) {
-                // タッチが停止しているとき、次の指が存在する場合は次の指でタッチ再開
-                this.start({
-                    offsetX: this.touchList[0].x,
-                    offsetY: this.touchList[0].y,
-                });
-            }
-        };
-    }
-
-    handlerTouchMove() {
-        return (e: TouchEvent) => {
-            if (!this.canvas) {
+            if (!this._isMoving) {
                 return;
             }
-            //e.preventDefault();
-            const rect = this.canvas.getBoundingClientRect();
 
-            const ts = this.touchMap;
-            for (let i = 0; i < e.changedTouches.length; i++) {
-                const t = e.changedTouches[i];
-                let v = ts[t.identifier];
-                if (v) {
-                    v.old = {
-                        x: v.x,
-                        y: v.y,
-                    };
-                    v.x = t.pageX - rect.left;
-                    v.y = t.pageY - rect.top;
-                } else {
-                    v = { id: t.identifier, x: t.pageX - rect.left, y: t.pageY - rect.top };
-                    ts[t.identifier] = v;
-                }
+            // ポインタ情報の更新
+            if (e.pointerId in this._pointers) {
+                const v = this._pointers[e.pointerId];
+                v.old = {
+                    x: v.x,
+                    y: v.y,
+                };
+                v.x = e.offsetX;
+                v.y = e.offsetY;
+            } else {
+                this._pointers[e.pointerId] = { id: e.pointerId, x: e.offsetX, y: e.offsetY };
             }
-            this.touchList = Object.values(ts).sort((a, b) => a.id - b.id);
+
+            // ポインタを古い順にソートして配列化
+            const pointers = Object.values(this._pointers).sort((a, b) => a.id - b.id);
+            if (pointers.length === 0) {
+                return;
+            }
 
             // １本目のタッチ情報
-            const t0 = this.touchList[0];
-            if (t0.old) {
-                // １本目の移動量
-                const d0x = t0.old.x - t0.x;
-                const d0y = t0.old.y - t0.y;
-
-                if (this.touchList.length >= 2) {
-                    // ２本目のタッチ情報
-                    const t1 = this.touchList[1];
-                    if (t1.old) {
-                        // ２本目の移動量
-                        const d1x = t1.old.x - t1.x;
-                        const d1y = t1.old.y - t1.y;
-
-                        // １本目と２本目の移動量の平均分、中心点をずらす。
-                        const dx = (d0x + d1x) / 2;
-                        const dy = (d0y + d1y) / 2;
-
-                        // ピンチイン・アウトの最終的な中心位置を求める
-                        const rx = (t0.x + t1.x) / 2;
-                        const ry = (t0.y + t1.y) / 2;
-                        this.moveCenter(rx - rect.width / 2 + dx, ry - rect.height / 2 + dy);
-
-                        // ピンチイン・アウト
-                        // １本目と２本目の移動場所、移動量からズームの変化を計算する
-                        const rb = Math.sqrt(
-                            (t0.old.x - t1.old.x) ** 2 + (t0.old.y - t1.old.y) ** 2,
-                        );
-                        const ra = Math.sqrt((t0.x - t1.x) ** 2 + (t0.y - t1.y) ** 2);
-                        const mpp = Geography.getMetersPerPixelByZoom(this.zoom);
-                        const z = Geography.getZoomByMetersPerPixel((mpp * rb) / ra);
-
-                        // 描画する
-                        this.draw(rx, ry, z);
-
-                        return;
-                    }
-                }
+            const p0 = pointers[0];
+            if (!p0.old) {
+                return;
             }
 
-            // drag
-            this.move({
-                offsetX: t0.x,
-                offsetY: t0.y,
-            });
-            this.draw();
+            const w = this.canvas.clientWidth;
+            const h = this.canvas.clientHeight;
+
+            // １本目の移動量
+            // 地図を右下にドラッグした場合、地図の中心を左上に移動することと同じ。
+            const d0 = new Vector2(p0.old.x - p0.x, p0.old.y - p0.y);
+
+            if (pointers.length >= 2) {
+                // マルチタッチ
+                // ２本目のタッチ情報
+                const p1 = pointers[1];
+                if (!p1.old) {
+                    return;
+                }
+
+                // ２本目の移動量
+                const d1 = new Vector2(p1.old.x - p1.x, p1.old.y - p1.y);
+
+                // １本目と２本目の移動量の平均分、中心点をずらす。
+                const dx = (d0.x + d1.x) / 2;
+                const dy = (d0.y + d1.y) / 2;
+
+                // ピンチイン・アウトの最終的な中心位置を求める
+                const rx = (p0.x + p1.x) / 2;
+                const ry = (p0.y + p1.y) / 2;
+                this.moveCenter(rx - w / 2 + dx, ry - h / 2 + dy);
+
+                let z = this.zoom;
+
+                // ピンチイン・アウト
+                // １本目と２本目の移動場所、移動量からズームの変化を計算する
+                const rb = Math.sqrt((p0.old.x - p1.old.x) ** 2 + (p0.old.y - p1.old.y) ** 2);
+                const ra = Math.sqrt((p0.x - p1.x) ** 2 + (p0.y - p1.y) ** 2);
+                const mpp = Geography.getMetersPerPixelByZoom(this.zoom);
+                z = Geography.getZoomByMetersPerPixel((mpp * rb) / ra);
+
+                if (z > this.zoomMax) z = this.zoomMax;
+                if (z < this.zoomMin) z = this.zoomMin;
+
+                if (this.enableRotate && pointers.length >= 3) {
+                    // ３本以上のときのみ回転有効
+                    // ２本のタッチ位置（移動前、移動後）を正規化する
+                    const v00 = new Vector2(p0.old.x / w - 0.5, p0.old.y / h - 0.5);
+                    const v01 = new Vector2(p0.x / w - 0.5, p0.y / h - 0.5);
+                    const v10 = new Vector2(p1.old.x / w - 0.5, p1.old.y / h - 0.5);
+                    const v11 = new Vector2(p1.x / w - 0.5, p1.y / h - 0.5);
+
+                    // ２本指間の中間位置を求める
+                    const c00 = v00.clone().add(v10).div(2);
+                    const c01 = v01.clone().add(v11).div(2);
+
+                    // 地図の中央を円の中心としたベクトルにする
+                    v00.sub(c00);
+                    v10.sub(c00);
+                    v01.sub(c01);
+                    v11.sub(c01);
+
+                    // 各指の回転角を求め、合算を平均したものを地図の回転角とする
+                    const delta0 = v00.angleTo(v01) * (v00.cross(v01) < 0 ? -1 : 1);
+                    const delta1 = v10.angleTo(v11) * (v10.cross(v11) < 0 ? -1 : 1);
+                    const deltaRad = (delta0 + delta1) / 2;
+
+                    let theta = this._theta + deltaRad;
+                    if (theta > Math.PI * 2) theta = theta - Math.PI * 2;
+                    if (theta < -Math.PI * 2) theta = theta + Math.PI * 2;
+                    this._theta = theta;
+                }
+
+                // 描画する
+                this.draw(rx, ry, z, false);
+
+                return;
+            } else {
+                // マウスドラッグ or シングルタッチ
+                if (this.enableRotate && this._shiftL) {
+                    // Shift + ドラッグで地図の回転
+                    const v0 = new Vector2(p0.old.x / w - 0.5, p0.old.y / h - 0.5);
+                    const v1 = new Vector2(p0.x / w - 0.5, p0.y / h - 0.5);
+                    const sign = v0.cross(v1) < 0 ? -1 : 1;
+
+                    let theta = this._theta + v0.angleTo(v1) * sign;
+                    if (theta > Math.PI * 2) theta = theta - Math.PI * 2;
+                    if (theta < -Math.PI * 2) theta = theta + Math.PI * 2;
+                    this._theta = theta;
+
+                    this.draw();
+                } else {
+                    // 地図の移動
+                    if (this._oldPoint) {
+                        const nx = this._oldPoint.x - d0.x;
+                        const ny = this._oldPoint.y - d0.y;
+                        this.move({
+                            offsetX: nx,
+                            offsetY: ny,
+                        });
+                        this.draw();
+                    }
+                }
+                return;
+            }
         };
     }
 
     handlerMouseWheel() {
         return (e: WheelEvent) => {
-            if (!this.canvas) {
-                return;
-            }
+            // disable wheel action by browser
             e.preventDefault();
 
             // ホイール操作開始位置を中心に拡大縮小するために中心点を移動する
             const x = e.offsetX;
             const y = e.offsetY;
-            const rect = this.canvas.getBoundingClientRect();
-            const dx = x - rect.width / 2;
-            const dy = y - rect.height / 2;
+            const dx = e.offsetX - this.canvas.clientWidth / 2;
+            const dy = e.offsetY - this.canvas.clientHeight / 2;
             this.moveCenter(dx, dy);
 
             let z = this.zoom;
             if (e.deltaY < 0) {
-                z += 0.1;
+                z += 1;
                 if (z > this.zoomMax) z = this.zoomMax;
             } else if (e.deltaY > 0) {
-                z += -0.1;
+                z += -1;
                 if (z < this.zoomMin) z = this.zoomMin;
             } else {
                 return;
             }
-            //this.zoom = z;
 
             this.draw(x, y, z);
+        };
+    }
+
+    handlerKeyDown() {
+        const keyMap: Record<string, () => void> = {
+            ShiftLeft: () => {
+                this._shiftL = true;
+            },
+        };
+
+        return (e: KeyboardEvent) => {
+            const func = keyMap[e.code];
+            if (func) func();
+        };
+    }
+
+    handlerKeyUp() {
+        const keyMap: Record<string, () => void> = {
+            ShiftLeft: () => {
+                this._shiftL = false;
+            },
+        };
+
+        return (e: KeyboardEvent) => {
+            const func = keyMap[e.code];
+            if (func) func();
         };
     }
 }

@@ -142,6 +142,81 @@
     }
   };
 
+  // src/vector.ts
+  var Vector2 = class _Vector2 {
+    constructor(x, y) {
+      __publicField(this, "x");
+      __publicField(this, "y");
+      this.x = x;
+      this.y = y;
+    }
+    clone() {
+      return new _Vector2(this.x, this.y);
+    }
+    add(obj) {
+      if (obj instanceof _Vector2) {
+        this.x += obj.x;
+        this.y += obj.y;
+      } else {
+        this.x += obj;
+        this.y += obj;
+      }
+      return this;
+    }
+    sub(obj) {
+      if (obj instanceof _Vector2) {
+        this.x -= obj.x;
+        this.y -= obj.y;
+      } else {
+        this.x -= obj;
+        this.y -= obj;
+      }
+      return this;
+    }
+    mul(obj) {
+      this.x *= obj;
+      this.y *= obj;
+      return this;
+    }
+    div(obj) {
+      this.x /= obj;
+      this.y /= obj;
+      return this;
+    }
+    dot(vec) {
+      return this.x * vec.x + this.y * vec.y;
+    }
+    cross(vec) {
+      return this.x * vec.y - this.y * vec.x;
+    }
+    lengthSq() {
+      return this.x ** 2 + this.y ** 2;
+    }
+    angleTo(vec) {
+      const denominator = Math.sqrt(this.lengthSq() * vec.lengthSq());
+      if (denominator === 0)
+        throw new Error("angleTo() can't handle zero length vectors.");
+      let theta = this.dot(vec) / denominator;
+      if (theta < -1)
+        theta = -1;
+      if (theta > 1)
+        theta = 1;
+      return Math.acos(theta);
+    }
+    translate(x, y) {
+      this.x += x;
+      this.y += y;
+      return this;
+    }
+    rotate(rad) {
+      const x = Math.cos(rad) * this.x - Math.sin(rad) * this.y;
+      const y = Math.sin(rad) * this.x + Math.cos(rad) * this.y;
+      this.x = x;
+      this.y = y;
+      return this;
+    }
+  };
+
   // src/mapricorn.ts
   var Mapricorn = class {
     constructor(opts) {
@@ -152,21 +227,23 @@
       __publicField(this, "canvas");
       __publicField(this, "mapSource", "https://tile.openstreetmap.org/{z}/{x}/{y}.png");
       //mapSource = '/map/osm/{z}/{x}/{y}.png';
-      __publicField(this, "offScreen");
-      __publicField(this, "useOffScreen", true);
       __publicField(this, "gpxData");
       __publicField(this, "center");
-      __publicField(this, "zoom", 1);
+      __publicField(this, "zoom", 2);
       __publicField(this, "zoomMax", 19);
-      __publicField(this, "zoomMin", 0);
+      __publicField(this, "zoomMin", 2);
       __publicField(this, "latMax", 0);
       __publicField(this, "lngMin", 0);
-      __publicField(this, "oldPoint");
-      __publicField(this, "isMoving", false);
-      __publicField(this, "touchMap", {});
-      __publicField(this, "touchList", []);
-      __publicField(this, "images", []);
+      __publicField(this, "enableRotate", true);
+      __publicField(this, "_oldPoint");
+      __publicField(this, "_isMoving", false);
+      __publicField(this, "_imageCache", {});
+      __publicField(this, "_drawing", false);
+      __publicField(this, "_pointers", {});
+      __publicField(this, "_shiftL", false);
+      __publicField(this, "_theta", 0);
       this.center = new LatLng([0, 0, 0]);
+      this.canvas = document.createElement("canvas");
       if (opts) {
         if (opts.mapSource) {
           this.mapSource = opts.mapSource;
@@ -182,6 +259,9 @@
         }
         if (opts.height) {
           this.height = opts.height;
+        }
+        if (opts.enableRotate) {
+          this.enableRotate = opts.enableRotate;
         }
         if (opts.container) {
           this.bind(opts.container);
@@ -208,158 +288,286 @@
       if (this.height) {
         this.container.style.height = this.height;
       }
-      if (!this.canvas) {
-        this.canvas = document.createElement("canvas");
-        this.container.appendChild(this.canvas);
-        this.canvas.style.width = "100%";
-        this.canvas.style.height = "100%";
-        const context = this.canvas.getContext("2d");
-        if (!context) {
-          return;
-        }
-        context.lineWidth = 1;
-        context.strokeStyle = "#fff";
-        this.canvas.addEventListener("mousedown", this.handlerMouseDown());
-        this.canvas.addEventListener("mouseup", this.handlerMouseUp());
-        this.canvas.addEventListener("mousemove", this.handlerMouseMove());
-        this.canvas.addEventListener("mouseleave", this.handlerMouseLeave());
-        this.canvas.addEventListener("touchstart", this.handlerTouchStart());
-        this.canvas.addEventListener("touchend", this.handlerTouchEnd());
-        this.canvas.addEventListener("touchmove", this.handlerTouchMove());
-        this.canvas.addEventListener("wheel", this.handlerMouseWheel());
-        window.addEventListener("resize", this.handlerResize());
-      }
+      this.canvas = document.createElement("canvas");
+      this.canvas.tabIndex = 0;
+      this.canvas.style.outline = "none";
+      this.canvas.focus();
+      this.canvas.style.position = "absolute";
+      this.canvas.style.width = "100%";
+      this.canvas.style.height = "100%";
+      this.container.appendChild(this.canvas);
+      this.canvas.addEventListener("touchstart", (event) => {
+        event.preventDefault();
+      });
+      this.canvas.addEventListener("pointerdown", this.handlerPointerDown());
+      this.canvas.addEventListener("pointerup", this.handlerPointerUp());
+      this.canvas.addEventListener("pointermove", this.handlerPointerMove());
+      this.canvas.addEventListener("wheel", this.handlerMouseWheel());
+      this.canvas.addEventListener("keydown", this.handlerKeyDown());
+      this.canvas.addEventListener("keyup", this.handlerKeyUp());
+      window.addEventListener("resize", this.handlerResize());
     }
     // canvasのリサイズと解像度設定（ぼやけ防止）
     // canvasの各種設定は消える
     resize() {
-      if (!this.canvas) {
-        return;
-      }
       const dpr = window.devicePixelRatio;
-      const rect = this.canvas.getBoundingClientRect();
-      this.canvas.width = rect.width * dpr;
-      this.canvas.height = rect.height * dpr;
-      if (this.useOffScreen) {
-        if (!this.offScreen) {
-          this.offScreen = document.createElement("canvas");
-        }
-        this.offScreen.width = rect.width * dpr;
-        this.offScreen.height = rect.height * dpr;
-      }
+      this.canvas.width = this.canvas.clientWidth * dpr;
+      this.canvas.height = this.canvas.clientHeight * dpr;
       const context = this.canvas.getContext("2d");
       if (!context) {
         return;
       }
+      context.restore();
       context.scale(dpr, dpr);
-      if (this.offScreen) {
-        const ctx = this.offScreen.getContext("2d");
-        if (!ctx) {
-          return;
-        }
-      }
+      context.save();
       this.draw();
     }
     // 現在の中心点と新しいズームレベルで地図を描画する
-    // offsetX, offsetYはズームの中心ピクセル（あらかじめmakeCenter()で
+    // offsetX, offsetYはズームの中心ピクセル（あらかじめmoveCenter()で
     // 中心点をこの位置に移動しておくこと。描画後に中心点は表示領域の中心に
     // 再設定される）。省略時はcanvasの中心
     // zoomは新しいズームレベルを指定する。省略時は現在のズームレベル
-    draw(offsetX, offsetY, zoom = this.zoom) {
-      if (!this.canvas || this.useOffScreen && !this.offScreen) {
+    // easingをfalseにするとズーム変更時もアニメーションしなくなる（ピンチ操作時のUX向上）
+    draw(offsetX, offsetY, zoom = this.zoom, easing = true) {
+      const ease = (func, duration, endFunc) => {
+        let start = -1;
+        const handler = { id: 0 };
+        const loop = (tic) => {
+          if (start < 0)
+            start = tic;
+          const progress = (tic - start) / duration;
+          func(progress);
+          if (progress < 1) {
+            handler.id = requestAnimationFrame(loop);
+          } else {
+            endFunc();
+          }
+        };
+        handler.id = requestAnimationFrame(loop);
+        return handler;
+      };
+      const end = () => {
+        this.zoom = zoom;
+        this._drawing = false;
+        if (offsetX !== void 0 && offsetY !== void 0) {
+          const rx = this.canvas.clientWidth / 2 - offsetX;
+          const ry = this.canvas.clientHeight / 2 - offsetY;
+          this.moveCenter(rx, ry);
+        }
+      };
+      if (this._drawing) {
         return;
       }
-      const rect = this.canvas.getBoundingClientRect();
-      const tilePixel = Geography.getTilePixelByZoom(zoom);
-      const center = Geography.degrees2meters(this.center.lat, this.center.lng);
-      const tile = Geography.meters2tile(center.x, center.y, zoom);
+      this._drawing = true;
+      if (!easing || zoom == this.zoom) {
+        this.draw2d(this.canvas, this.center, zoom, 1, offsetX, offsetY);
+        end();
+      } else {
+        const sign = zoom > this.zoom ? 1 : -1;
+        ease(
+          (progress) => {
+            if (progress > 1)
+              progress = 1;
+            this.draw2d(
+              this.canvas,
+              this.center,
+              this.zoom + sign * progress,
+              1,
+              offsetX,
+              offsetY
+            );
+          },
+          300,
+          end
+        );
+      }
+    }
+    draw2d(canvas, center, zoom, alpha = 1, offsetX, offsetY) {
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      const cx = offsetX != null ? offsetX : w / 2;
+      const cy = offsetY != null ? offsetY : h / 2;
+      const pa = new Vector2(-cx, -cy).rotate(-this._theta);
+      const pb = new Vector2(w - cx, -cy).rotate(-this._theta);
+      const pc = new Vector2(w - cx, h - cy).rotate(-this._theta);
+      const pd = new Vector2(-cx, h - cy).rotate(-this._theta);
+      const center_meter = Geography.degrees2meters(center.lat, center.lng);
       const mpp = Geography.getMetersPerPixelByZoom(zoom);
-      const ltx = center.x - (offsetX != null ? offsetX : rect.width / 2) * mpp;
-      const lty = center.y + (offsetY != null ? offsetY : rect.height / 2) * mpp;
+      const pma = new Vector2(center_meter.x + pa.x * mpp, center_meter.y - pa.y * mpp);
+      const pmb = new Vector2(center_meter.x + pb.x * mpp, center_meter.y - pb.y * mpp);
+      const pmc = new Vector2(center_meter.x + pc.x * mpp, center_meter.y - pc.y * mpp);
+      const pmd = new Vector2(center_meter.x + pd.x * mpp, center_meter.y - pd.y * mpp);
+      const vab = pmb.clone().sub(pma);
+      const vbc = pmc.clone().sub(pmb);
+      const vcd = pmd.clone().sub(pmc);
+      const vda = pma.clone().sub(pmd);
+      const ta = Geography.meters2tile(pma.x, pma.y, zoom);
+      const tb = Geography.meters2tile(pmb.x, pmb.y, zoom);
+      const tc = Geography.meters2tile(pmc.x, pmc.y, zoom);
+      const td = Geography.meters2tile(pmd.x, pmd.y, zoom);
+      let minX = Infinity, minY = Infinity;
+      let maxX = -Infinity, maxY = -Infinity;
+      [ta, tb, tc, td].forEach((tile2) => {
+        if (tile2.x < minX)
+          minX = tile2.x;
+        if (tile2.y < minY)
+          minY = tile2.y;
+        if (tile2.x > maxX)
+          maxX = tile2.x;
+        if (tile2.y > maxY)
+          maxY = tile2.y;
+      });
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        return;
+      }
+      ctx.restore();
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(cx, cy);
+      ctx.rotate(this._theta);
+      if (this.debug) {
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = "#f00";
+        ctx.fillStyle = "red";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.font = "26px Arial";
+      }
+      const world_center = Geography.meter2world(center_meter.x, center_meter.y, zoom);
+      const tile = Geography.meters2tile(center_meter.x, center_meter.y, zoom);
+      const world_meter = Geography.tile2meters(tile.x, tile.y, zoom);
+      const world = Geography.meter2world(world_meter.x, world_meter.y, zoom);
+      const deltax = world_center.x - world.x;
+      const deltay = world_center.y - world.y;
+      const tilePixel = Geography.getTilePixelByZoom(zoom);
+      const tlenx = maxX - minX + 1;
+      const tleny = maxY - minY + 1;
+      const disparray = [...Array(tleny)].map(() => [...Array(tlenx)].fill(false));
+      for (let iy = 0; iy < tleny; iy++) {
+        for (let ix = 0; ix < tlenx; ix++) {
+          const p = Geography.tile2meters(ix + minX, iy + minY, zoom);
+          const point = new Vector2(p.x, p.y);
+          const vap = point.clone().sub(pma);
+          const vbp = point.clone().sub(pmb);
+          const vcp = point.clone().sub(pmc);
+          const vdp = point.clone().sub(pmd);
+          const crosses = vab.cross(vap) < 0 && vbc.cross(vbp) < 0 && vcd.cross(vcp) < 0 && vda.cross(vdp) < 0;
+          disparray[iy][ix] = crosses;
+          if (crosses) {
+            if (iy > 0) {
+              disparray[iy - 1][ix] = true;
+            }
+            if (ix > 0) {
+              disparray[iy][ix - 1] = true;
+            }
+            if (iy > 0 && ix > 0) {
+              disparray[iy - 1][ix - 1] = true;
+            }
+          }
+        }
+      }
+      for (let iy = 0; iy < tleny; iy++) {
+        for (let ix = 0; ix < tlenx; ix++) {
+          if (disparray[iy][ix]) {
+            const tx = minX + ix;
+            const ty = minY + iy;
+            const x2 = (tx - tile.x) * tilePixel - deltax;
+            const y2 = (ty - tile.y) * tilePixel - deltay;
+            const url = this.getMapURL(tx, ty, zoom);
+            let image;
+            if (url in this._imageCache) {
+              image = this._imageCache[url];
+              ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
+            } else {
+              image = new Image(tilePixel, tilePixel);
+              image.src = url;
+            }
+            const handler = () => {
+              ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
+              image.removeEventListener("load", handler);
+              this._imageCache[url] = image;
+              if (this.debug) {
+                ctx.strokeRect(x2, y2, tilePixel, tilePixel);
+                ctx.fillText(
+                  `${zoom}/${tx}/${ty}`,
+                  x2 + tilePixel / 2,
+                  y2 + tilePixel / 2
+                );
+              }
+            };
+            image.addEventListener("load", handler);
+          }
+        }
+      }
+    }
+    draw2d_(canvas, center, zoom, alpha = 1, offsetX, offsetY) {
+      const tilePixel = Geography.getTilePixelByZoom(zoom);
+      const center_meter = Geography.degrees2meters(center.lat, center.lng);
+      const tile = Geography.meters2tile(center_meter.x, center_meter.y, zoom);
+      const cx = offsetX != null ? offsetX : canvas.clientWidth / 2;
+      const cy = offsetY != null ? offsetY : canvas.clientHeight / 2;
+      const mpp = Geography.getMetersPerPixelByZoom(zoom);
+      const ltx = center_meter.x - cx * mpp;
+      const lty = center_meter.y + cy * mpp;
       const startTile = Geography.meters2tile(ltx, lty, zoom);
       const world_meter = Geography.tile2meters(tile.x, tile.y, zoom);
       const world = Geography.meter2world(world_meter.x, world_meter.y, zoom);
-      const world_center = Geography.meter2world(center.x, center.y, zoom);
-      const cx = offsetX != null ? offsetX : rect.width / 2;
-      const cy = offsetY != null ? offsetY : rect.height / 2;
+      const world_center = Geography.meter2world(center_meter.x, center_meter.y, zoom);
       const dx = world_center.x - world.x;
       const dy = world_center.y - world.y;
       const modx = (cx - dx) % tilePixel;
-      const tilexnum = Math.ceil((rect.width - modx) / tilePixel) + (modx > 0 ? 1 : 0);
+      const tilexnum = Math.ceil((canvas.clientWidth - modx) / tilePixel) + (modx > 0 ? 1 : 0);
       const mody = (cy - dy) % tilePixel;
-      const tileynum = Math.ceil((rect.height - mody) / tilePixel) + (mody > 0 ? 1 : 0);
-      const context = this.canvas.getContext("2d");
-      if (!context) {
+      const tileynum = Math.ceil((canvas.clientHeight - mody) / tilePixel) + (mody > 0 ? 1 : 0);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
         return;
       }
-      const ctx = this.offScreen ? this.offScreen.getContext("2d") : context;
-      if (ctx) {
-        if (this.debug) {
-          ctx.lineWidth = 1;
-          ctx.strokeStyle = "#f00";
-          ctx.fillStyle = "red";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.font = "26px Arial";
-        }
-      } else {
-        return;
+      ctx.restore();
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(cx, cy);
+      ctx.rotate(this._theta);
+      if (this.debug) {
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = "#f00";
+        ctx.fillStyle = "red";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.font = "26px Arial";
       }
       const startTile_meter = Geography.tile2meters(startTile.x, startTile.y, zoom);
       const offsetX_meter = startTile_meter.x - ltx;
       const offsetY_meter = lty - startTile_meter.y;
       const deltax = offsetX_meter / mpp;
       const deltay = offsetY_meter / mpp;
-      const tileNum = tilexnum * tileynum;
-      let tiles = 0;
-      for (const i of this.images) {
-        i.src = "";
-      }
-      this.images = [];
       for (let x = 0; x < tilexnum; x++) {
         for (let y = 0; y < tileynum; y++) {
           const tx = startTile.x + x;
           const ty = startTile.y + y;
+          const x2 = x * tilePixel + deltax - cx;
+          const y2 = y * tilePixel + deltay - cy;
           const url = this.getMapURL(tx, ty, zoom);
-          const image = new Image();
-          this.images.push(image);
-          image.addEventListener("load", () => {
-            const x2 = x * tilePixel + deltax;
-            const y2 = y * tilePixel + deltay;
-            if (this.offScreen) {
-              ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
-              if (this.debug) {
-                ctx.strokeRect(x2, y2, tilePixel, tilePixel);
-                ctx.fillText(
-                  `${zoom}/${tx}/${ty}`,
-                  x2 + tilePixel / 2,
-                  y2 + tilePixel / 2
-                );
-              }
-              tiles++;
-              if (tiles === tileNum) {
-                context.drawImage(this.offScreen, 0, 0);
-              }
-            } else {
-              ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
-              if (this.debug) {
-                ctx.strokeRect(x2, y2, tilePixel, tilePixel);
-                ctx.fillText(
-                  `${zoom}/${tx}/${ty}`,
-                  x2 + tilePixel / 2,
-                  y2 + tilePixel / 2
-                );
-              }
+          let image;
+          if (url in this._imageCache) {
+            image = this._imageCache[url];
+            ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
+          } else {
+            image = new Image(tilePixel, tilePixel);
+            image.src = url;
+          }
+          const handler = () => {
+            ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
+            image.removeEventListener("load", handler);
+            this._imageCache[url] = image;
+            if (this.debug) {
+              ctx.strokeRect(x2, y2, tilePixel, tilePixel);
+              ctx.fillText(`${zoom}/${tx}/${ty}`, x2 + tilePixel / 2, y2 + tilePixel / 2);
             }
-          });
-          image.src = url;
+          };
+          image.addEventListener("load", handler);
         }
-      }
-      this.zoom = zoom;
-      if (offsetX !== void 0 && offsetY !== void 0) {
-        const rx = rect.width / 2 - offsetX;
-        const ry = rect.height / 2 - offsetY;
-        this.moveCenter(rx, ry);
       }
     }
     // OpenStreetMapなどの地図画像に対するURLを生成する
@@ -398,20 +606,16 @@
     }
     // CanvasとGPXデータの範囲で適切なズームレベルを計算して設定する
     adjustZoomLevelByGPXData(margin = 1.2) {
-      if (!this.canvas) {
-        return;
-      }
       if (!this.gpxData) {
         return void 0;
       }
-      const rect = this.canvas.getBoundingClientRect();
       const s = this.gpxData.stats;
       const min = Geography.degrees2meters(s.latMin, s.lngMin);
       const max = Geography.degrees2meters(s.latMax, s.lngMax);
       const wm = (max.x - min.x) * margin;
       const hm = (max.y - min.y) * margin;
-      const wz = Math.round(Geography.getZoomByMetersPerPixel(wm / rect.width));
-      const hz = Math.round(Geography.getZoomByMetersPerPixel(hm / rect.height));
+      const wz = Math.round(Geography.getZoomByMetersPerPixel(wm / this.canvas.clientWidth));
+      const hz = Math.round(Geography.getZoomByMetersPerPixel(hm / this.canvas.clientHeight));
       this.zoom = wz < hz ? wz : hz;
     }
     setMapSource(mapSource) {
@@ -430,10 +634,15 @@
     // 中心点をx,yピクセル分移動する
     // 移動方向は正の数なら南東方向
     moveCenter(dx, dy) {
+      const dv = new Vector2(dx, dy);
+      dv.rotate(-this._theta);
+      if (this._drawing) {
+        return;
+      }
       const mpp = Geography.getMetersPerPixelByZoom(this.zoom);
       const center = Geography.degrees2meters(this.center.lat, this.center.lng);
-      center.x += dx * mpp;
-      center.y -= dy * mpp;
+      center.x += dv.x * mpp;
+      center.y -= dv.y * mpp;
       const deg = Geography.meters2degrees(center.x, center.y);
       if (deg.lat > 85) {
         deg.lat = 85;
@@ -451,183 +660,200 @@
       this.center.lng = deg.lng;
     }
     start({ offsetX: x, offsetY: y }) {
-      this.isMoving = true;
-      this.oldPoint = { x, y };
+      this._isMoving = true;
+      this._oldPoint = { x, y };
     }
     stop() {
-      this.oldPoint = void 0;
-      this.isMoving = false;
+      this._oldPoint = void 0;
+      this._isMoving = false;
     }
     // 指定座標に中心点を移動する
     move({ offsetX: x, offsetY: y }) {
-      if (this.oldPoint) {
-        const dx = this.oldPoint.x - x;
-        const dy = this.oldPoint.y - y;
+      if (this._oldPoint) {
+        const dx = this._oldPoint.x - x;
+        const dy = this._oldPoint.y - y;
         this.moveCenter(dx, dy);
       }
-      this.oldPoint = { x, y };
+      this._oldPoint = { x, y };
     }
     handlerResize() {
       return () => {
         this.resize();
       };
     }
-    handlerMouseDown() {
+    handlerPointerDown() {
       return (e) => {
-        if (this.canvas) {
+        this._pointers[e.pointerId] = {
+          id: e.pointerId,
+          x: e.offsetX,
+          y: e.offsetY
+        };
+        const element = e.currentTarget;
+        element.setPointerCapture(e.pointerId);
+        const pointers = Object.values(this._pointers);
+        if (pointers.length === 1) {
           this.canvas.style.cursor = "grab";
+          this.start({
+            offsetX: pointers[0].x,
+            offsetY: pointers[0].y
+          });
         }
-        this.start(e);
       };
     }
-    handlerMouseUp() {
-      return () => {
-        this.stop();
-        if (this.canvas) {
+    handlerPointerUp() {
+      return (e) => {
+        const element = e.currentTarget;
+        element.releasePointerCapture(e.pointerId);
+        delete this._pointers[e.pointerId];
+        const pointers = Object.values(this._pointers);
+        if (pointers.length === 0) {
+          this.stop();
           this.canvas.style.cursor = "";
         }
       };
     }
-    handlerMouseMove() {
+    handlerPointerMove() {
       return (e) => {
-        if (this.isMoving) {
-          if (this.canvas) {
-            this.canvas.style.cursor = "grabbing";
+        if (!this._isMoving) {
+          return;
+        }
+        if (e.pointerId in this._pointers) {
+          const v = this._pointers[e.pointerId];
+          v.old = {
+            x: v.x,
+            y: v.y
+          };
+          v.x = e.offsetX;
+          v.y = e.offsetY;
+        } else {
+          this._pointers[e.pointerId] = { id: e.pointerId, x: e.offsetX, y: e.offsetY };
+        }
+        const pointers = Object.values(this._pointers).sort((a, b) => a.id - b.id);
+        if (pointers.length === 0) {
+          return;
+        }
+        const p0 = pointers[0];
+        if (!p0.old) {
+          return;
+        }
+        const w = this.canvas.clientWidth;
+        const h = this.canvas.clientHeight;
+        const d0 = new Vector2(p0.old.x - p0.x, p0.old.y - p0.y);
+        if (pointers.length >= 2) {
+          const p1 = pointers[1];
+          if (!p1.old) {
+            return;
           }
-          this.move(e);
-          this.draw();
-        }
-      };
-    }
-    handlerMouseLeave() {
-      return () => {
-      };
-    }
-    handlerTouchStart() {
-      return (e) => {
-        if (!this.canvas) {
-          return;
-        }
-        e.preventDefault();
-        const rect = this.canvas.getBoundingClientRect();
-        const ts = this.touchMap;
-        const len = Object.keys(ts).length;
-        for (let i = 0; i < e.changedTouches.length; i++) {
-          const t = e.changedTouches[i];
-          const v = { id: t.identifier, x: t.pageX - rect.left, y: t.pageY - rect.top };
-          ts[t.identifier] = v;
-        }
-        this.touchList = Object.values(ts).sort((a, b) => a.id - b.id);
-        if (len === 0) {
-          this.start({
-            offsetX: this.touchList[0].x,
-            offsetY: this.touchList[0].y
-          });
-        }
-      };
-    }
-    handlerTouchEnd() {
-      return (e) => {
-        if (!this.canvas) {
-          return;
-        }
-        const ts = this.touchMap;
-        for (let i = 0; i < e.changedTouches.length; i++) {
-          const t = e.changedTouches[i];
-          if (this.touchList.length > 0 && this.touchList[0].id === t.identifier) {
-            this.stop();
+          const d1 = new Vector2(p1.old.x - p1.x, p1.old.y - p1.y);
+          const dx = (d0.x + d1.x) / 2;
+          const dy = (d0.y + d1.y) / 2;
+          const rx = (p0.x + p1.x) / 2;
+          const ry = (p0.y + p1.y) / 2;
+          this.moveCenter(rx - w / 2 + dx, ry - h / 2 + dy);
+          let z = this.zoom;
+          const rb = Math.sqrt((p0.old.x - p1.old.x) ** 2 + (p0.old.y - p1.old.y) ** 2);
+          const ra = Math.sqrt((p0.x - p1.x) ** 2 + (p0.y - p1.y) ** 2);
+          const mpp = Geography.getMetersPerPixelByZoom(this.zoom);
+          z = Geography.getZoomByMetersPerPixel(mpp * rb / ra);
+          if (z > this.zoomMax)
+            z = this.zoomMax;
+          if (z < this.zoomMin)
+            z = this.zoomMin;
+          if (this.enableRotate && pointers.length >= 3) {
+            const v00 = new Vector2(p0.old.x / w - 0.5, p0.old.y / h - 0.5);
+            const v01 = new Vector2(p0.x / w - 0.5, p0.y / h - 0.5);
+            const v10 = new Vector2(p1.old.x / w - 0.5, p1.old.y / h - 0.5);
+            const v11 = new Vector2(p1.x / w - 0.5, p1.y / h - 0.5);
+            const c00 = v00.clone().add(v10).div(2);
+            const c01 = v01.clone().add(v11).div(2);
+            v00.sub(c00);
+            v10.sub(c00);
+            v01.sub(c01);
+            v11.sub(c01);
+            const delta0 = v00.angleTo(v01) * (v00.cross(v01) < 0 ? -1 : 1);
+            const delta1 = v10.angleTo(v11) * (v10.cross(v11) < 0 ? -1 : 1);
+            const deltaRad = (delta0 + delta1) / 2;
+            let theta = this._theta + deltaRad;
+            if (theta > Math.PI * 2)
+              theta = theta - Math.PI * 2;
+            if (theta < -Math.PI * 2)
+              theta = theta + Math.PI * 2;
+            this._theta = theta;
           }
-          delete ts[t.identifier];
-        }
-        this.touchList = Object.values(ts).sort((a, b) => a.id - b.id);
-        if (!this.isMoving && this.touchList.length > 0) {
-          this.start({
-            offsetX: this.touchList[0].x,
-            offsetY: this.touchList[0].y
-          });
-        }
-      };
-    }
-    handlerTouchMove() {
-      return (e) => {
-        if (!this.canvas) {
+          this.draw(rx, ry, z, false);
           return;
-        }
-        const rect = this.canvas.getBoundingClientRect();
-        const ts = this.touchMap;
-        for (let i = 0; i < e.changedTouches.length; i++) {
-          const t = e.changedTouches[i];
-          let v = ts[t.identifier];
-          if (v) {
-            v.old = {
-              x: v.x,
-              y: v.y
-            };
-            v.x = t.pageX - rect.left;
-            v.y = t.pageY - rect.top;
+        } else {
+          if (this.enableRotate && this._shiftL) {
+            const v0 = new Vector2(p0.old.x / w - 0.5, p0.old.y / h - 0.5);
+            const v1 = new Vector2(p0.x / w - 0.5, p0.y / h - 0.5);
+            const sign = v0.cross(v1) < 0 ? -1 : 1;
+            let theta = this._theta + v0.angleTo(v1) * sign;
+            if (theta > Math.PI * 2)
+              theta = theta - Math.PI * 2;
+            if (theta < -Math.PI * 2)
+              theta = theta + Math.PI * 2;
+            this._theta = theta;
+            this.draw();
           } else {
-            v = { id: t.identifier, x: t.pageX - rect.left, y: t.pageY - rect.top };
-            ts[t.identifier] = v;
-          }
-        }
-        this.touchList = Object.values(ts).sort((a, b) => a.id - b.id);
-        const t0 = this.touchList[0];
-        if (t0.old) {
-          const d0x = t0.old.x - t0.x;
-          const d0y = t0.old.y - t0.y;
-          if (this.touchList.length >= 2) {
-            const t1 = this.touchList[1];
-            if (t1.old) {
-              const d1x = t1.old.x - t1.x;
-              const d1y = t1.old.y - t1.y;
-              const dx = (d0x + d1x) / 2;
-              const dy = (d0y + d1y) / 2;
-              const rx = (t0.x + t1.x) / 2;
-              const ry = (t0.y + t1.y) / 2;
-              this.moveCenter(rx - rect.width / 2 + dx, ry - rect.height / 2 + dy);
-              const rb = Math.sqrt(
-                (t0.old.x - t1.old.x) ** 2 + (t0.old.y - t1.old.y) ** 2
-              );
-              const ra = Math.sqrt((t0.x - t1.x) ** 2 + (t0.y - t1.y) ** 2);
-              const mpp = Geography.getMetersPerPixelByZoom(this.zoom);
-              const z = Geography.getZoomByMetersPerPixel(mpp * rb / ra);
-              this.draw(rx, ry, z);
-              return;
+            if (this._oldPoint) {
+              const nx = this._oldPoint.x - d0.x;
+              const ny = this._oldPoint.y - d0.y;
+              this.move({
+                offsetX: nx,
+                offsetY: ny
+              });
+              this.draw();
             }
           }
+          return;
         }
-        this.move({
-          offsetX: t0.x,
-          offsetY: t0.y
-        });
-        this.draw();
       };
     }
     handlerMouseWheel() {
       return (e) => {
-        if (!this.canvas) {
-          return;
-        }
         e.preventDefault();
         const x = e.offsetX;
         const y = e.offsetY;
-        const rect = this.canvas.getBoundingClientRect();
-        const dx = x - rect.width / 2;
-        const dy = y - rect.height / 2;
+        const dx = e.offsetX - this.canvas.clientWidth / 2;
+        const dy = e.offsetY - this.canvas.clientHeight / 2;
         this.moveCenter(dx, dy);
         let z = this.zoom;
         if (e.deltaY < 0) {
-          z += 0.1;
+          z += 1;
           if (z > this.zoomMax)
             z = this.zoomMax;
         } else if (e.deltaY > 0) {
-          z += -0.1;
+          z += -1;
           if (z < this.zoomMin)
             z = this.zoomMin;
         } else {
           return;
         }
         this.draw(x, y, z);
+      };
+    }
+    handlerKeyDown() {
+      const keyMap = {
+        ShiftLeft: () => {
+          this._shiftL = true;
+        }
+      };
+      return (e) => {
+        const func = keyMap[e.code];
+        if (func)
+          func();
+      };
+    }
+    handlerKeyUp() {
+      const keyMap = {
+        ShiftLeft: () => {
+          this._shiftL = false;
+        }
+      };
+      return (e) => {
+        const func = keyMap[e.code];
+        if (func)
+          func();
       };
     }
   };

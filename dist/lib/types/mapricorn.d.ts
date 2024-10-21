@@ -1,6 +1,6 @@
 import { LatLng, type LatLngExpression } from './latlng.js';
 import type { GPXData } from './gpx.js';
-type TouchInfo = {
+type PointerInfo = {
     id: number;
     x: number;
     y: number;
@@ -16,16 +16,15 @@ export type MapricornOptions = {
     mapSource?: string;
     center?: LatLngExpression;
     zoom?: number;
+    enableRotate?: boolean;
 };
 export declare class Mapricorn {
     debug: boolean;
     container?: HTMLElement;
     width: string;
     height: string;
-    canvas?: HTMLCanvasElement;
+    canvas: HTMLCanvasElement;
     mapSource: string;
-    offScreen?: HTMLCanvasElement;
-    useOffScreen: boolean;
     gpxData?: GPXData;
     center: LatLng;
     zoom: number;
@@ -33,19 +32,24 @@ export declare class Mapricorn {
     zoomMin: number;
     latMax: number;
     lngMin: number;
-    oldPoint?: {
+    enableRotate: boolean;
+    _oldPoint?: {
         x: number;
         y: number;
     };
-    isMoving: boolean;
-    touchMap: Record<number, TouchInfo>;
-    touchList: TouchInfo[];
-    images: HTMLImageElement[];
+    _isMoving: boolean;
+    _imageCache: Record<string, HTMLImageElement>;
+    _drawing: boolean;
+    _pointers: Record<number, PointerInfo>;
+    _shiftL: boolean;
+    _theta: number;
     constructor(opts?: MapricornOptions);
     bind(container: HTMLElement): void;
     setup(): void;
     resize(): void;
-    draw(offsetX?: number, offsetY?: number, zoom?: number): void;
+    draw(offsetX?: number, offsetY?: number, zoom?: number, easing?: boolean): void;
+    draw2d(canvas: HTMLCanvasElement, center: LatLng, zoom: number, alpha?: number, offsetX?: number, offsetY?: number): void;
+    draw2d_(canvas: HTMLCanvasElement, center: LatLng, zoom: number, alpha?: number, offsetX?: number, offsetY?: number): void;
     getMapURL(x: number, y: number, zoom: number): string;
     setGPXData(gpxData: GPXData, setView?: boolean): void;
     adjustCenterByGPXData(): void;
@@ -58,13 +62,11 @@ export declare class Mapricorn {
     stop(): void;
     move({ offsetX: x, offsetY: y }: MouseEvent | Record<string, number>): void;
     handlerResize(): () => void;
-    handlerMouseDown(): (e: MouseEvent) => void;
-    handlerMouseUp(): () => void;
-    handlerMouseMove(): (e: MouseEvent) => void;
-    handlerMouseLeave(): () => void;
-    handlerTouchStart(): (e: TouchEvent) => void;
-    handlerTouchEnd(): (e: TouchEvent) => void;
-    handlerTouchMove(): (e: TouchEvent) => void;
+    handlerPointerDown(): (e: PointerEvent) => void;
+    handlerPointerUp(): (e: PointerEvent) => void;
+    handlerPointerMove(): (e: PointerEvent) => void;
     handlerMouseWheel(): (e: WheelEvent) => void;
+    handlerKeyDown(): (e: KeyboardEvent) => void;
+    handlerKeyUp(): (e: KeyboardEvent) => void;
 }
 export {};
