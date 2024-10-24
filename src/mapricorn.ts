@@ -201,8 +201,11 @@ export class Mapricorn {
 
         const end = () => {
             if (easing && zoom != this.zoom) {
-                this.draw2d(this.canvas, this.center, zoom, 0, 1, offsetX, offsetY);
+                this.draw2d(this.canvas, this.center, zoom, 0, offsetX, offsetY);
             }
+
+            // canvasの透明度をリセットする
+            this.canvas.style.opacity = '1.0';
 
             // 新しいズームを反映する
             this.zoom = zoom;
@@ -228,25 +231,30 @@ export class Mapricorn {
         this._drawing = true;
 
         if (!easing || zoom == this.zoom) {
-            this.draw2d(this.canvas, this.center, zoom, 0, 1, offsetX, offsetY);
+            this.draw2d(this.canvas, this.center, zoom, 0, offsetX, offsetY);
             end();
         } else {
             // ズーム倍率変更をイージングつきで行う
-            const sign = zoom > this.zoom ? 1 : -1;
-
-            // ズーム完了後の地図を置いておく
-            this.draw2d(this.canvas2, this.center, zoom, 0, 1, offsetX, offsetY);
+            const sign = zoom - this.zoom;
 
             // アニメーションでイージング用キャンバスのサイズと透明度を変更する。
             ease(
                 (progress: number) => {
                     // 変化前の描画
+                    this.canvas.style.opacity = String(1 - progress);
                     this.draw2d(
                         this.canvas,
                         this.center,
                         this.zoom,
                         sign * progress,
-                        1 - progress,
+                        offsetX,
+                        offsetY,
+                    );
+                    this.draw2d(
+                        this.canvas2,
+                        this.center,
+                        zoom,
+                        -sign * (1 - progress),
                         offsetX,
                         offsetY,
                     );
@@ -262,7 +270,6 @@ export class Mapricorn {
         center: LatLng,
         zoom: number,
         decimals: number = 0,
-        alpha: number = 1,
         offsetX?: number,
         offsetY?: number,
     ) {
@@ -343,7 +350,6 @@ export class Mapricorn {
         }
         ctx.restore();
         ctx.save();
-        ctx.globalAlpha = alpha;
         ctx.translate(cx, cy);
         ctx.rotate(this._theta);
         const putTileText = (x: number, y: number, str: string) => {

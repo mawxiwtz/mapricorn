@@ -181,8 +181,9 @@ class Mapricorn {
     };
     const end = () => {
       if (easing && zoom != this.zoom) {
-        this.draw2d(this.canvas, this.center, zoom, 0, 1, offsetX, offsetY);
+        this.draw2d(this.canvas, this.center, zoom, 0, offsetX, offsetY);
       }
+      this.canvas.style.opacity = "1.0";
       this.zoom = zoom;
       this._drawing = false;
       if (offsetX !== void 0 && offsetY !== void 0) {
@@ -196,19 +197,26 @@ class Mapricorn {
     }
     this._drawing = true;
     if (!easing || zoom == this.zoom) {
-      this.draw2d(this.canvas, this.center, zoom, 0, 1, offsetX, offsetY);
+      this.draw2d(this.canvas, this.center, zoom, 0, offsetX, offsetY);
       end();
     } else {
-      const sign = zoom > this.zoom ? 1 : -1;
-      this.draw2d(this.canvas2, this.center, zoom, 0, 1, offsetX, offsetY);
+      const sign = zoom - this.zoom;
       ease(
         (progress) => {
+          this.canvas.style.opacity = String(1 - progress);
           this.draw2d(
             this.canvas,
             this.center,
             this.zoom,
             sign * progress,
-            1 - progress,
+            offsetX,
+            offsetY
+          );
+          this.draw2d(
+            this.canvas2,
+            this.center,
+            zoom,
+            -sign * (1 - progress),
             offsetX,
             offsetY
           );
@@ -218,7 +226,7 @@ class Mapricorn {
       );
     }
   }
-  draw2d(canvas, center, zoom, decimals = 0, alpha = 1, offsetX, offsetY) {
+  draw2d(canvas, center, zoom, decimals = 0, offsetX, offsetY) {
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
     const cx = offsetX ?? w / 2;
@@ -266,7 +274,6 @@ class Mapricorn {
     }
     ctx.restore();
     ctx.save();
-    ctx.globalAlpha = alpha;
     ctx.translate(cx, cy);
     ctx.rotate(this._theta);
     const putTileText = (x, y, str) => {
