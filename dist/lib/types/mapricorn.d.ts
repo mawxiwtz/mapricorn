@@ -17,13 +17,14 @@ export type MapricornOptions = {
     center?: LatLngExpression;
     zoom?: number;
     enableRotate?: boolean;
+    showTileInfo?: boolean;
 };
 export declare class Mapricorn {
-    debug: boolean;
     container?: HTMLElement;
     width: string;
     height: string;
     canvas: HTMLCanvasElement;
+    canvas2: HTMLCanvasElement;
     mapSource: string;
     gpxData?: GPXData;
     center: LatLng;
@@ -33,6 +34,8 @@ export declare class Mapricorn {
     latMax: number;
     lngMin: number;
     enableRotate: boolean;
+    showTileInfo: boolean;
+    _serial: number;
     _oldPoint?: {
         x: number;
         y: number;
@@ -48,8 +51,7 @@ export declare class Mapricorn {
     setup(): void;
     resize(): void;
     draw(offsetX?: number, offsetY?: number, zoom?: number, easing?: boolean): void;
-    draw2d(canvas: HTMLCanvasElement, center: LatLng, zoom: number, alpha?: number, offsetX?: number, offsetY?: number): void;
-    draw2d_(canvas: HTMLCanvasElement, center: LatLng, zoom: number, alpha?: number, offsetX?: number, offsetY?: number): void;
+    draw2d(canvas: HTMLCanvasElement, center: LatLng, zoom: number, decimals?: number, alpha?: number, offsetX?: number, offsetY?: number): void;
     getMapURL(x: number, y: number, zoom: number): string;
     setGPXData(gpxData: GPXData, setView?: boolean): void;
     adjustCenterByGPXData(): void;

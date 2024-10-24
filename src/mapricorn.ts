@@ -21,15 +21,16 @@ export type MapricornOptions = {
     center?: LatLngExpression;
     zoom?: number;
     enableRotate?: boolean;
+    showTileInfo?: boolean;
 };
 
 // 地図表示を行うクラス
 export class Mapricorn {
-    debug = false;
     container?: HTMLElement;
     width = '';
     height = '';
     canvas: HTMLCanvasElement;
+    canvas2: HTMLCanvasElement;
     mapSource = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
     //mapSource = '/map/osm/{z}/{x}/{y}.png';
     gpxData?: GPXData;
@@ -40,18 +41,24 @@ export class Mapricorn {
     latMax: number = 0;
     lngMin: number = 0;
     enableRotate: boolean = true;
+    showTileInfo = false;
 
+    _serial: number = 0;
     _oldPoint?: { x: number; y: number };
     _isMoving = false;
-    _imageCache: Record<string, HTMLImageElement> = {};
+    _imageCache: Record<string, HTMLImageElement>;
     _drawing: boolean = false;
-    _pointers: Record<number, PointerInfo> = {};
+    _pointers: Record<number, PointerInfo>;
     _shiftL = false;
     _theta = 0;
 
     constructor(opts?: MapricornOptions) {
         this.center = new LatLng([0, 0, 0]);
         this.canvas = document.createElement('canvas');
+        this.canvas2 = document.createElement('canvas');
+        this._imageCache = {};
+        this._pointers = {};
+
         if (opts) {
             if (opts.mapSource) {
                 this.mapSource = opts.mapSource;
@@ -70,6 +77,9 @@ export class Mapricorn {
             }
             if (opts.enableRotate) {
                 this.enableRotate = opts.enableRotate;
+            }
+            if (opts.showTileInfo) {
+                this.showTileInfo = opts.showTileInfo;
             }
             if (opts.container) {
                 this.bind(opts.container);
@@ -92,6 +102,7 @@ export class Mapricorn {
             return;
         }
         this.container.style.position = 'relative';
+        this.container.style.overflow = 'hidden';
         if (this.width) {
             this.container.style.width = this.width;
         }
@@ -100,28 +111,38 @@ export class Mapricorn {
         }
 
         this.canvas = document.createElement('canvas');
-        this.canvas.tabIndex = 0; // enable receive key event on canvas element
-        this.canvas.style.outline = 'none'; // not show outline of canvas when getting focus
-        this.canvas.focus();
         this.canvas.style.position = 'absolute';
         this.canvas.style.width = '100%';
         this.canvas.style.height = '100%';
+        this.canvas.style.zIndex = '1';
         this.container.appendChild(this.canvas);
 
+        this.canvas2 = document.createElement('canvas');
+        this.canvas2.style.position = 'absolute';
+        this.canvas2.style.width = '100%';
+        this.canvas2.style.height = '100%';
+        this.canvas2.style.zIndex = '0';
+        this.container.appendChild(this.canvas2);
+
+        window.addEventListener('resize', this.handlerResize());
+
+        // container setup
+        this.container.tabIndex = 0; // enable receive key event on element
+        this.container.style.outline = 'none'; // not show outline of element when getting focus
+        this.container.focus();
+
         // disable pinch in-out by browser
-        this.canvas.addEventListener('touchstart', (event) => {
+        this.container.addEventListener('touchstart', (event) => {
             event.preventDefault();
         });
 
-        this.canvas.addEventListener('pointerdown', this.handlerPointerDown());
-        this.canvas.addEventListener('pointerup', this.handlerPointerUp());
-        this.canvas.addEventListener('pointermove', this.handlerPointerMove());
-        this.canvas.addEventListener('wheel', this.handlerMouseWheel());
+        this.container.addEventListener('pointerdown', this.handlerPointerDown());
+        this.container.addEventListener('pointerup', this.handlerPointerUp());
+        this.container.addEventListener('pointermove', this.handlerPointerMove());
+        this.container.addEventListener('wheel', this.handlerMouseWheel());
 
-        this.canvas.addEventListener('keydown', this.handlerKeyDown());
-        this.canvas.addEventListener('keyup', this.handlerKeyUp());
-
-        window.addEventListener('resize', this.handlerResize());
+        this.container.addEventListener('keydown', this.handlerKeyDown());
+        this.container.addEventListener('keyup', this.handlerKeyUp());
     }
 
     // canvasのリサイズと解像度設定（ぼやけ防止）
@@ -131,6 +152,9 @@ export class Mapricorn {
         this.canvas.width = this.canvas.clientWidth * dpr;
         this.canvas.height = this.canvas.clientHeight * dpr;
 
+        this.canvas2.width = this.canvas2.clientWidth * dpr;
+        this.canvas2.height = this.canvas2.clientHeight * dpr;
+
         const context = this.canvas.getContext('2d');
         if (!context) {
             return;
@@ -138,6 +162,14 @@ export class Mapricorn {
         context.restore();
         context.scale(dpr, dpr);
         context.save();
+
+        const context2 = this.canvas2.getContext('2d');
+        if (!context2) {
+            return;
+        }
+        context2.restore();
+        context2.scale(dpr, dpr);
+        context2.save();
 
         this.draw();
     }
@@ -154,7 +186,8 @@ export class Mapricorn {
             const handler = { id: 0 };
             const loop = (tic: number) => {
                 if (start < 0) start = tic;
-                const progress = (tic - start) / duration;
+                let progress = (tic - start) / duration;
+                if (progress > 1) progress = 1;
                 func(progress);
                 if (progress < 1) {
                     handler.id = requestAnimationFrame(loop);
@@ -167,6 +200,10 @@ export class Mapricorn {
         };
 
         const end = () => {
+            if (easing && zoom != this.zoom) {
+                this.draw2d(this.canvas, this.center, zoom, 0, 1, offsetX, offsetY);
+            }
+
             // 新しいズームを反映する
             this.zoom = zoom;
 
@@ -191,22 +228,25 @@ export class Mapricorn {
         this._drawing = true;
 
         if (!easing || zoom == this.zoom) {
-            this.draw2d(this.canvas, this.center, zoom, 1, offsetX, offsetY);
+            this.draw2d(this.canvas, this.center, zoom, 0, 1, offsetX, offsetY);
             end();
         } else {
             // ズーム倍率変更をイージングつきで行う
             const sign = zoom > this.zoom ? 1 : -1;
 
+            // ズーム完了後の地図を置いておく
+            this.draw2d(this.canvas2, this.center, zoom, 0, 1, offsetX, offsetY);
+
             // アニメーションでイージング用キャンバスのサイズと透明度を変更する。
             ease(
                 (progress: number) => {
-                    if (progress > 1) progress = 1;
                     // 変化前の描画
                     this.draw2d(
                         this.canvas,
                         this.center,
-                        this.zoom + sign * progress,
-                        1,
+                        this.zoom,
+                        sign * progress,
+                        1 - progress,
                         offsetX,
                         offsetY,
                     );
@@ -221,6 +261,7 @@ export class Mapricorn {
         canvas: HTMLCanvasElement,
         center: LatLng,
         zoom: number,
+        decimals: number = 0,
         alpha: number = 1,
         offsetX?: number,
         offsetY?: number,
@@ -252,7 +293,7 @@ export class Mapricorn {
         const center_meter = Geography.degrees2meters(center.lat, center.lng);
 
         // 1ピクセル当たりのメートル
-        const mpp = Geography.getMetersPerPixelByZoom(zoom);
+        const mpp = Geography.getMetersPerPixelByZoom(zoom + decimals);
 
         // 四隅それぞれのメートル座標
         const pma = new Vector2(center_meter.x + pa.x * mpp, center_meter.y - pa.y * mpp);
@@ -282,6 +323,19 @@ export class Mapricorn {
             if (tile.y > maxY) maxY = tile.y;
         });
 
+        // 中心点のワールド座標
+        const world_center = Geography.meter2world(center_meter.x, center_meter.y, zoom + decimals);
+        // 中心点のあるタイル
+        const tile = Geography.meters2tile(center_meter.x, center_meter.y, zoom);
+        const world_meter = Geography.tile2meters(tile.x, tile.y, zoom);
+        const world = Geography.meter2world(world_meter.x, world_meter.y, zoom + decimals);
+        // 中心点のあるタイルにおける中心点の相対ワールド座標（南東方向が正）
+        const deltax = world_center.x - world.x;
+        const deltay = world_center.y - world.y;
+
+        // タイル一辺のピクセル数
+        const tilePixel = Geography.getTilePixelByZoom(zoom, decimals);
+
         // canvasコンテキストの準備
         const ctx = canvas.getContext('2d');
         if (!ctx) {
@@ -292,28 +346,19 @@ export class Mapricorn {
         ctx.globalAlpha = alpha;
         ctx.translate(cx, cy);
         ctx.rotate(this._theta);
+        const putTileText = (x: number, y: number, str: string) => {
+            ctx.strokeRect(x, y, tilePixel, tilePixel);
+            ctx.fillText(str, x + tilePixel / 2, y + tilePixel / 2);
+        };
 
-        if (this.debug) {
+        if (this.showTileInfo) {
             ctx.lineWidth = 1;
             ctx.strokeStyle = '#f00';
             ctx.fillStyle = 'red';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.font = '26px Arial';
+            ctx.font = `${Math.ceil(tilePixel / 10)}px Arial`;
         }
-
-        // 中心点のワールド座標
-        const world_center = Geography.meter2world(center_meter.x, center_meter.y, zoom);
-        // 中心点のあるタイル
-        const tile = Geography.meters2tile(center_meter.x, center_meter.y, zoom);
-        const world_meter = Geography.tile2meters(tile.x, tile.y, zoom);
-        const world = Geography.meter2world(world_meter.x, world_meter.y, zoom);
-        // 中心点のあるタイルにおける中心点の相対ワールド座標（南東方向が正）
-        const deltax = world_center.x - world.x;
-        const deltay = world_center.y - world.y;
-
-        // タイル一辺のピクセル数
-        const tilePixel = Geography.getTilePixelByZoom(zoom);
 
         // タイル範囲内で表示範囲内にあるタイルを描画
         const tlenx = maxX - minX + 1;
@@ -351,6 +396,7 @@ export class Mapricorn {
             }
         }
 
+        let serial = this._serial;
         for (let iy = 0; iy < tleny; iy++) {
             for (let ix = 0; ix < tlenx; ix++) {
                 if (disparray[iy][ix]) {
@@ -360,165 +406,41 @@ export class Mapricorn {
                     const x2 = (tx - tile.x) * tilePixel - deltax; // - cx;
                     const y2 = (ty - tile.y) * tilePixel - deltay; // - cy;
 
+                    const tileText = `${Math.round(zoom)}/${tx}/${ty}`;
                     const url = this.getMapURL(tx, ty, zoom);
                     let image: HTMLImageElement;
                     if (url in this._imageCache) {
                         image = this._imageCache[url];
                         ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
+
+                        // タイルの境界とタイルXYの表示
+                        if (this.showTileInfo) {
+                            putTileText(x2, y2, tileText);
+                        }
                     } else {
                         image = new Image(tilePixel, tilePixel);
                         image.src = url;
                         //ctx.fillRect(x2, y2, tilePixel, tilePixel);
                     }
                     const handler = () => {
-                        // 表示コンテキストに直接描画
-                        ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
+                        if (serial === this._serial) {
+                            // 地図画像読み込み後も現在のdrawが無効になっていなければ描画を行う
+                            ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
+                            // タイルの境界とタイルXYの表示
+                            if (this.showTileInfo) {
+                                putTileText(x2, y2, tileText);
+                            }
+                        }
                         image.removeEventListener('load', handler);
                         this._imageCache[url] = image;
-
-                        // タイルの境界とタイルXYの表示
-                        if (this.debug) {
-                            ctx.strokeRect(x2, y2, tilePixel, tilePixel);
-                            ctx.fillText(
-                                `${zoom}/${tx}/${ty}`,
-                                x2 + tilePixel / 2,
-                                y2 + tilePixel / 2,
-                            );
-                        }
                     };
                     image.addEventListener('load', handler);
                 }
             }
         }
-    }
 
-    draw2d_(
-        canvas: HTMLCanvasElement,
-        center: LatLng,
-        zoom: number,
-        alpha: number = 1,
-        offsetX?: number,
-        offsetY?: number,
-    ) {
-        const tilePixel = Geography.getTilePixelByZoom(zoom);
-
-        // 複数の座標系があるので注意
-        //   経緯度：グリニッジ/赤道を原点とした度数単位。北東方向が正の数値
-        //   メートル：グリニッジ/赤道を原点としたメートル単位。北東方向が正の数値
-        //   タイルXY；グリニッジ/北極を原点としたタイル番号。南東方向が正の数値
-        //   ワールド座標：グリニッジ/赤道を原点としたピクセル単位。南東方向が正の数値
-        //   Canvas座標：画面のcanvasタグ領域の左上隅を原点としたピクセル単位。南東方向が正の数値
-
-        // 中心点（メートル）と中心タイルXYを求める
-        const center_meter = Geography.degrees2meters(center.lat, center.lng);
-        const tile = Geography.meters2tile(center_meter.x, center_meter.y, zoom);
-        const cx = offsetX ?? canvas.clientWidth / 2;
-        const cy = offsetY ?? canvas.clientHeight / 2;
-
-        // 描画開始点のタイルのXYを求める（開始点のLat/Lngがはっきりしている場合）
-        //const startTile = Geography.degrees2tile(this.latMax, this.lngMin, zoom);
-        // 描画開始点のタイルのXYを求める（zoomと表示領域から決める場合）
-        const mpp = Geography.getMetersPerPixelByZoom(zoom);
-        const ltx = center_meter.x - cx * mpp;
-        const lty = center_meter.y + cy * mpp;
-        const startTile = Geography.meters2tile(ltx, lty, zoom);
-
-        // ワールド座標の計算
-        const world_meter = Geography.tile2meters(tile.x, tile.y, zoom);
-        const world = Geography.meter2world(world_meter.x, world_meter.y, zoom);
-        const world_center = Geography.meter2world(center_meter.x, center_meter.y, zoom);
-
-        // タイルが必要な範囲を計算する
-        // Canvasサイズから、実際に表示可能なタイル数はおのずと決まる
-        //   rect: Canvas(px)
-        //   center: Canvasの中心(px)
-        //   world: 中心タイル左上隅のワールド座標
-        //   world_center: 地図の中心のワールド座標
-        //   tpx: タイルの1辺のピクセル数(= 256)
-        //   cx, cy: canvas上の中心点（小数点未満は切り捨て）
-        //   dx, dy: 地図の中心点と中心タイル左上隅との差）
-        const dx = world_center.x - world.x;
-        const dy = world_center.y - world.y;
-
-        // 1. canvasのサイズに応じた必要タイル数とはみ出しピクセル数を求める
-        //    「左側はみ出し」と、「フル表示+右側はみ出し」にわけて考える。
-        //    左側はみ出しピクセル数 modx = (cx - dx) % tpx
-        //    modxが0ならはみだしなし、0以上なら左はみだしあり。ただし負数なら画面外なので描画不要
-        //      tilexnum = modxを除いた部分をカバーするタイル数 + modx分のタイル
-        //      高さについても同様に計算
-        const modx = (cx - dx) % tilePixel;
-        const tilexnum = Math.ceil((canvas.clientWidth - modx) / tilePixel) + (modx > 0 ? 1 : 0);
-        const mody = (cy - dy) % tilePixel;
-        const tileynum = Math.ceil((canvas.clientHeight - mody) / tilePixel) + (mody > 0 ? 1 : 0);
-
-        // 2. Canvasにタイル画像を敷き詰める。
-        //      ln + lm + tx + rm + rn
-        //      高さについても同様に計算
-        //      左上隅から敷いていく
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-            return;
-        }
-        ctx.restore();
-        ctx.save();
-        ctx.globalAlpha = alpha;
-        ctx.translate(cx, cy);
-        ctx.rotate(this._theta);
-
-        if (this.debug) {
-            ctx.lineWidth = 1;
-            ctx.strokeStyle = '#f00';
-            ctx.fillStyle = 'red';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.font = '26px Arial';
-        }
-
-        // オフスクリーンからcanvasに転送する際のオフセットを計算
-        // こちらが速くできるが、startTileがタイルマップの最初でないといけない
-        //const deltax = modx >= 0 ? modx - tilePixel : modx;
-        //const deltay = mody >= 0 ? mody - tilePixel : mody;
-        // こちらが汎用
-        const startTile_meter = Geography.tile2meters(startTile.x, startTile.y, zoom);
-        const offsetX_meter = startTile_meter.x - ltx;
-        const offsetY_meter = lty - startTile_meter.y;
-        const deltax = offsetX_meter / mpp;
-        const deltay = offsetY_meter / mpp;
-        // ctx.fillStyle = '#ddd';
-
-        for (let x = 0; x < tilexnum; x++) {
-            for (let y = 0; y < tileynum; y++) {
-                const tx =
-                    startTile.x + x; /* + (modx > 0 ? -1 : 0) // lng指定startTileの場合に必要 */
-                const ty =
-                    startTile.y + y; /* + (mody > 0 ? -1 : 0) // lat指定startTileの場合に必要 */
-                const x2 = x * tilePixel + deltax - cx;
-                const y2 = y * tilePixel + deltay - cy;
-                const url = this.getMapURL(tx, ty, zoom);
-                let image: HTMLImageElement;
-                if (url in this._imageCache) {
-                    image = this._imageCache[url];
-                    ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
-                } else {
-                    image = new Image(tilePixel, tilePixel);
-                    image.src = url;
-                    //ctx.fillRect(x2, y2, tilePixel, tilePixel);
-                }
-                const handler = () => {
-                    // 表示コンテキストに直接描画
-                    ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
-                    image.removeEventListener('load', handler);
-                    this._imageCache[url] = image;
-
-                    // タイルの境界とタイルXYの表示
-                    if (this.debug) {
-                        ctx.strokeRect(x2, y2, tilePixel, tilePixel);
-                        ctx.fillText(`${zoom}/${tx}/${ty}`, x2 + tilePixel / 2, y2 + tilePixel / 2);
-                    }
-                };
-                image.addEventListener('load', handler);
-            }
-        }
+        serial++;
+        this._serial = serial > 65536 ? 0 : serial;
     }
 
     // OpenStreetMapなどの地図画像に対するURLを生成する
@@ -601,11 +523,11 @@ export class Mapricorn {
     // 中心点をx,yピクセル分移動する
     // 移動方向は正の数なら南東方向
     moveCenter(dx: number, dy: number) {
-        const dv = new Vector2(dx, dy);
-        dv.rotate(-this._theta);
         if (this._drawing) {
             return;
         }
+        const dv = new Vector2(dx, dy);
+        dv.rotate(-this._theta);
         const mpp = Geography.getMetersPerPixelByZoom(this.zoom);
 
         // 中心経緯度をメートルに直す

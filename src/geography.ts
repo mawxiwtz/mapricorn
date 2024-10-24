@@ -2,8 +2,11 @@ export const R = 6378137; // 地球の赤道半径(m)
 export const TILE_PIXEL = 256; // タイル1辺のピクセル数
 
 export class Geography {
-    static getTilePixelByZoom(zoom: number) {
-        return TILE_PIXEL * (2 ** zoom / 2 ** Math.round(zoom));
+    static getTilePixelByZoom(zoom: number, decimals: number = 0) {
+        // タイルと表示ズームレベルが同じ場合はdecimalsは省略可。
+        // タイルのズームレベルと表示ズームレベルを別々に指定したい場合は、
+        // zoomにタイルのズームレベル、decimalsにzoom加算値を指定する。
+        return TILE_PIXEL * (2 ** (zoom + decimals) / 2 ** Math.round(zoom));
     }
 
     // 経緯度をグリニッジ子午線/赤道を原点としたm単位に変換する

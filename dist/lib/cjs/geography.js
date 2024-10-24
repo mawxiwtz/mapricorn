@@ -26,8 +26,8 @@ module.exports = __toCommonJS(geography_exports);
 const R = 6378137;
 const TILE_PIXEL = 256;
 class Geography {
-  static getTilePixelByZoom(zoom) {
-    return TILE_PIXEL * (2 ** zoom / 2 ** Math.round(zoom));
+  static getTilePixelByZoom(zoom, decimals = 0) {
+    return TILE_PIXEL * (2 ** (zoom + decimals) / 2 ** Math.round(zoom));
   }
   // 経緯度をグリニッジ子午線/赤道を原点としたm単位に変換する
   static degrees2meters(lat, lng) {

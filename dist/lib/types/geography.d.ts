@@ -1,7 +1,7 @@
 export declare const R = 6378137;
 export declare const TILE_PIXEL = 256;
 export declare class Geography {
-    static getTilePixelByZoom(zoom: number): number;
+    static getTilePixelByZoom(zoom: number, decimals?: number): number;
     static degrees2meters(lat: number, lng: number): {
         x: number;
         y: number;

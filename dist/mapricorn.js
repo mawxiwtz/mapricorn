@@ -87,8 +87,8 @@
   var R = 6378137;
   var TILE_PIXEL = 256;
   var Geography = class _Geography {
-    static getTilePixelByZoom(zoom) {
-      return TILE_PIXEL * (2 ** zoom / 2 ** Math.round(zoom));
+    static getTilePixelByZoom(zoom, decimals = 0) {
+      return TILE_PIXEL * (2 ** (zoom + decimals) / 2 ** Math.round(zoom));
     }
     // 経緯度をグリニッジ子午線/赤道を原点としたm単位に変換する
     static degrees2meters(lat, lng) {
@@ -220,11 +220,11 @@
   // src/mapricorn.ts
   var Mapricorn = class {
     constructor(opts) {
-      __publicField(this, "debug", false);
       __publicField(this, "container");
       __publicField(this, "width", "");
       __publicField(this, "height", "");
       __publicField(this, "canvas");
+      __publicField(this, "canvas2");
       __publicField(this, "mapSource", "https://tile.openstreetmap.org/{z}/{x}/{y}.png");
       //mapSource = '/map/osm/{z}/{x}/{y}.png';
       __publicField(this, "gpxData");
@@ -235,15 +235,20 @@
       __publicField(this, "latMax", 0);
       __publicField(this, "lngMin", 0);
       __publicField(this, "enableRotate", true);
+      __publicField(this, "showTileInfo", false);
+      __publicField(this, "_serial", 0);
       __publicField(this, "_oldPoint");
       __publicField(this, "_isMoving", false);
-      __publicField(this, "_imageCache", {});
+      __publicField(this, "_imageCache");
       __publicField(this, "_drawing", false);
-      __publicField(this, "_pointers", {});
+      __publicField(this, "_pointers");
       __publicField(this, "_shiftL", false);
       __publicField(this, "_theta", 0);
       this.center = new LatLng([0, 0, 0]);
       this.canvas = document.createElement("canvas");
+      this.canvas2 = document.createElement("canvas");
+      this._imageCache = {};
+      this._pointers = {};
       if (opts) {
         if (opts.mapSource) {
           this.mapSource = opts.mapSource;
@@ -262,6 +267,9 @@
         }
         if (opts.enableRotate) {
           this.enableRotate = opts.enableRotate;
+        }
+        if (opts.showTileInfo) {
+          this.showTileInfo = opts.showTileInfo;
         }
         if (opts.container) {
           this.bind(opts.container);
@@ -282,6 +290,7 @@
         return;
       }
       this.container.style.position = "relative";
+      this.container.style.overflow = "hidden";
       if (this.width) {
         this.container.style.width = this.width;
       }
@@ -289,23 +298,30 @@
         this.container.style.height = this.height;
       }
       this.canvas = document.createElement("canvas");
-      this.canvas.tabIndex = 0;
-      this.canvas.style.outline = "none";
-      this.canvas.focus();
       this.canvas.style.position = "absolute";
       this.canvas.style.width = "100%";
       this.canvas.style.height = "100%";
+      this.canvas.style.zIndex = "1";
       this.container.appendChild(this.canvas);
-      this.canvas.addEventListener("touchstart", (event) => {
+      this.canvas2 = document.createElement("canvas");
+      this.canvas2.style.position = "absolute";
+      this.canvas2.style.width = "100%";
+      this.canvas2.style.height = "100%";
+      this.canvas2.style.zIndex = "0";
+      this.container.appendChild(this.canvas2);
+      window.addEventListener("resize", this.handlerResize());
+      this.container.tabIndex = 0;
+      this.container.style.outline = "none";
+      this.container.focus();
+      this.container.addEventListener("touchstart", (event) => {
         event.preventDefault();
       });
-      this.canvas.addEventListener("pointerdown", this.handlerPointerDown());
-      this.canvas.addEventListener("pointerup", this.handlerPointerUp());
-      this.canvas.addEventListener("pointermove", this.handlerPointerMove());
-      this.canvas.addEventListener("wheel", this.handlerMouseWheel());
-      this.canvas.addEventListener("keydown", this.handlerKeyDown());
-      this.canvas.addEventListener("keyup", this.handlerKeyUp());
-      window.addEventListener("resize", this.handlerResize());
+      this.container.addEventListener("pointerdown", this.handlerPointerDown());
+      this.container.addEventListener("pointerup", this.handlerPointerUp());
+      this.container.addEventListener("pointermove", this.handlerPointerMove());
+      this.container.addEventListener("wheel", this.handlerMouseWheel());
+      this.container.addEventListener("keydown", this.handlerKeyDown());
+      this.container.addEventListener("keyup", this.handlerKeyUp());
     }
     // canvasのリサイズと解像度設定（ぼやけ防止）
     // canvasの各種設定は消える
@@ -313,6 +329,8 @@
       const dpr = window.devicePixelRatio;
       this.canvas.width = this.canvas.clientWidth * dpr;
       this.canvas.height = this.canvas.clientHeight * dpr;
+      this.canvas2.width = this.canvas2.clientWidth * dpr;
+      this.canvas2.height = this.canvas2.clientHeight * dpr;
       const context = this.canvas.getContext("2d");
       if (!context) {
         return;
@@ -320,6 +338,13 @@
       context.restore();
       context.scale(dpr, dpr);
       context.save();
+      const context2 = this.canvas2.getContext("2d");
+      if (!context2) {
+        return;
+      }
+      context2.restore();
+      context2.scale(dpr, dpr);
+      context2.save();
       this.draw();
     }
     // 現在の中心点と新しいズームレベルで地図を描画する
@@ -335,7 +360,9 @@
         const loop = (tic) => {
           if (start < 0)
             start = tic;
-          const progress = (tic - start) / duration;
+          let progress = (tic - start) / duration;
+          if (progress > 1)
+            progress = 1;
           func(progress);
           if (progress < 1) {
             handler.id = requestAnimationFrame(loop);
@@ -347,6 +374,9 @@
         return handler;
       };
       const end = () => {
+        if (easing && zoom != this.zoom) {
+          this.draw2d(this.canvas, this.center, zoom, 0, 1, offsetX, offsetY);
+        }
         this.zoom = zoom;
         this._drawing = false;
         if (offsetX !== void 0 && offsetY !== void 0) {
@@ -360,19 +390,19 @@
       }
       this._drawing = true;
       if (!easing || zoom == this.zoom) {
-        this.draw2d(this.canvas, this.center, zoom, 1, offsetX, offsetY);
+        this.draw2d(this.canvas, this.center, zoom, 0, 1, offsetX, offsetY);
         end();
       } else {
         const sign = zoom > this.zoom ? 1 : -1;
+        this.draw2d(this.canvas2, this.center, zoom, 0, 1, offsetX, offsetY);
         ease(
           (progress) => {
-            if (progress > 1)
-              progress = 1;
             this.draw2d(
               this.canvas,
               this.center,
-              this.zoom + sign * progress,
-              1,
+              this.zoom,
+              sign * progress,
+              1 - progress,
               offsetX,
               offsetY
             );
@@ -382,7 +412,7 @@
         );
       }
     }
-    draw2d(canvas, center, zoom, alpha = 1, offsetX, offsetY) {
+    draw2d(canvas, center, zoom, decimals = 0, alpha = 1, offsetX, offsetY) {
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
       const cx = offsetX != null ? offsetX : w / 2;
@@ -392,7 +422,7 @@
       const pc = new Vector2(w - cx, h - cy).rotate(-this._theta);
       const pd = new Vector2(-cx, h - cy).rotate(-this._theta);
       const center_meter = Geography.degrees2meters(center.lat, center.lng);
-      const mpp = Geography.getMetersPerPixelByZoom(zoom);
+      const mpp = Geography.getMetersPerPixelByZoom(zoom + decimals);
       const pma = new Vector2(center_meter.x + pa.x * mpp, center_meter.y - pa.y * mpp);
       const pmb = new Vector2(center_meter.x + pb.x * mpp, center_meter.y - pb.y * mpp);
       const pmc = new Vector2(center_meter.x + pc.x * mpp, center_meter.y - pc.y * mpp);
@@ -417,6 +447,13 @@
         if (tile2.y > maxY)
           maxY = tile2.y;
       });
+      const world_center = Geography.meter2world(center_meter.x, center_meter.y, zoom + decimals);
+      const tile = Geography.meters2tile(center_meter.x, center_meter.y, zoom);
+      const world_meter = Geography.tile2meters(tile.x, tile.y, zoom);
+      const world = Geography.meter2world(world_meter.x, world_meter.y, zoom + decimals);
+      const deltax = world_center.x - world.x;
+      const deltay = world_center.y - world.y;
+      const tilePixel = Geography.getTilePixelByZoom(zoom, decimals);
       const ctx = canvas.getContext("2d");
       if (!ctx) {
         return;
@@ -426,21 +463,18 @@
       ctx.globalAlpha = alpha;
       ctx.translate(cx, cy);
       ctx.rotate(this._theta);
-      if (this.debug) {
+      const putTileText = (x, y, str) => {
+        ctx.strokeRect(x, y, tilePixel, tilePixel);
+        ctx.fillText(str, x + tilePixel / 2, y + tilePixel / 2);
+      };
+      if (this.showTileInfo) {
         ctx.lineWidth = 1;
         ctx.strokeStyle = "#f00";
         ctx.fillStyle = "red";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.font = "26px Arial";
+        ctx.font = `${Math.ceil(tilePixel / 10)}px Arial`;
       }
-      const world_center = Geography.meter2world(center_meter.x, center_meter.y, zoom);
-      const tile = Geography.meters2tile(center_meter.x, center_meter.y, zoom);
-      const world_meter = Geography.tile2meters(tile.x, tile.y, zoom);
-      const world = Geography.meter2world(world_meter.x, world_meter.y, zoom);
-      const deltax = world_center.x - world.x;
-      const deltay = world_center.y - world.y;
-      const tilePixel = Geography.getTilePixelByZoom(zoom);
       const tlenx = maxX - minX + 1;
       const tleny = maxY - minY + 1;
       const disparray = [...Array(tleny)].map(() => [...Array(tlenx)].fill(false));
@@ -467,6 +501,7 @@
           }
         }
       }
+      let serial = this._serial;
       for (let iy = 0; iy < tleny; iy++) {
         for (let ix = 0; ix < tlenx; ix++) {
           if (disparray[iy][ix]) {
@@ -474,101 +509,35 @@
             const ty = minY + iy;
             const x2 = (tx - tile.x) * tilePixel - deltax;
             const y2 = (ty - tile.y) * tilePixel - deltay;
+            const tileText = `${Math.round(zoom)}/${tx}/${ty}`;
             const url = this.getMapURL(tx, ty, zoom);
             let image;
             if (url in this._imageCache) {
               image = this._imageCache[url];
               ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
+              if (this.showTileInfo) {
+                putTileText(x2, y2, tileText);
+              }
             } else {
               image = new Image(tilePixel, tilePixel);
               image.src = url;
             }
             const handler = () => {
-              ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
+              if (serial === this._serial) {
+                ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
+                if (this.showTileInfo) {
+                  putTileText(x2, y2, tileText);
+                }
+              }
               image.removeEventListener("load", handler);
               this._imageCache[url] = image;
-              if (this.debug) {
-                ctx.strokeRect(x2, y2, tilePixel, tilePixel);
-                ctx.fillText(
-                  `${zoom}/${tx}/${ty}`,
-                  x2 + tilePixel / 2,
-                  y2 + tilePixel / 2
-                );
-              }
             };
             image.addEventListener("load", handler);
           }
         }
       }
-    }
-    draw2d_(canvas, center, zoom, alpha = 1, offsetX, offsetY) {
-      const tilePixel = Geography.getTilePixelByZoom(zoom);
-      const center_meter = Geography.degrees2meters(center.lat, center.lng);
-      const tile = Geography.meters2tile(center_meter.x, center_meter.y, zoom);
-      const cx = offsetX != null ? offsetX : canvas.clientWidth / 2;
-      const cy = offsetY != null ? offsetY : canvas.clientHeight / 2;
-      const mpp = Geography.getMetersPerPixelByZoom(zoom);
-      const ltx = center_meter.x - cx * mpp;
-      const lty = center_meter.y + cy * mpp;
-      const startTile = Geography.meters2tile(ltx, lty, zoom);
-      const world_meter = Geography.tile2meters(tile.x, tile.y, zoom);
-      const world = Geography.meter2world(world_meter.x, world_meter.y, zoom);
-      const world_center = Geography.meter2world(center_meter.x, center_meter.y, zoom);
-      const dx = world_center.x - world.x;
-      const dy = world_center.y - world.y;
-      const modx = (cx - dx) % tilePixel;
-      const tilexnum = Math.ceil((canvas.clientWidth - modx) / tilePixel) + (modx > 0 ? 1 : 0);
-      const mody = (cy - dy) % tilePixel;
-      const tileynum = Math.ceil((canvas.clientHeight - mody) / tilePixel) + (mody > 0 ? 1 : 0);
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        return;
-      }
-      ctx.restore();
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.translate(cx, cy);
-      ctx.rotate(this._theta);
-      if (this.debug) {
-        ctx.lineWidth = 1;
-        ctx.strokeStyle = "#f00";
-        ctx.fillStyle = "red";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.font = "26px Arial";
-      }
-      const startTile_meter = Geography.tile2meters(startTile.x, startTile.y, zoom);
-      const offsetX_meter = startTile_meter.x - ltx;
-      const offsetY_meter = lty - startTile_meter.y;
-      const deltax = offsetX_meter / mpp;
-      const deltay = offsetY_meter / mpp;
-      for (let x = 0; x < tilexnum; x++) {
-        for (let y = 0; y < tileynum; y++) {
-          const tx = startTile.x + x;
-          const ty = startTile.y + y;
-          const x2 = x * tilePixel + deltax - cx;
-          const y2 = y * tilePixel + deltay - cy;
-          const url = this.getMapURL(tx, ty, zoom);
-          let image;
-          if (url in this._imageCache) {
-            image = this._imageCache[url];
-            ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
-          } else {
-            image = new Image(tilePixel, tilePixel);
-            image.src = url;
-          }
-          const handler = () => {
-            ctx.drawImage(image, x2, y2, tilePixel, tilePixel);
-            image.removeEventListener("load", handler);
-            this._imageCache[url] = image;
-            if (this.debug) {
-              ctx.strokeRect(x2, y2, tilePixel, tilePixel);
-              ctx.fillText(`${zoom}/${tx}/${ty}`, x2 + tilePixel / 2, y2 + tilePixel / 2);
-            }
-          };
-          image.addEventListener("load", handler);
-        }
-      }
+      serial++;
+      this._serial = serial > 65536 ? 0 : serial;
     }
     // OpenStreetMapなどの地図画像に対するURLを生成する
     getMapURL(x, y, zoom) {
@@ -634,11 +603,11 @@
     // 中心点をx,yピクセル分移動する
     // 移動方向は正の数なら南東方向
     moveCenter(dx, dy) {
-      const dv = new Vector2(dx, dy);
-      dv.rotate(-this._theta);
       if (this._drawing) {
         return;
       }
+      const dv = new Vector2(dx, dy);
+      dv.rotate(-this._theta);
       const mpp = Geography.getMetersPerPixelByZoom(this.zoom);
       const center = Geography.degrees2meters(this.center.lat, this.center.lng);
       center.x += dv.x * mpp;

@@ -1,6 +1,6 @@
 {
   "name": "mapricorn",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Mapricorn the Map viewer",
   "private": true,
   "type": "module",
