@@ -8,6 +8,7 @@ const sources = [
     `${srcdir}/latlng.ts`,
     `${srcdir}/gpx.ts`,
     `${srcdir}/geography.ts`,
+    `${srcdir}/vector.ts`,
 ];
 const destdir = './dist';
 const isServeMode = process.argv.includes('--serve');
