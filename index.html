@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <title>Mapricorn Demo - the Map Rendering Engine"</title>
+        <meta name="description" content="Interactive playground for the Mapricorn." />
+    </head>
+    <body>
+        <div class="page">
+            <header>
+                <h1>Mapricorn Demo</h1>
+                <p class="info">
+                    <img
+                        src="https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/github.svg"
+                        alt="GitHub Logo"
+                        width="32"
+                        height="32" />
+                    <a href="https://github.com/mawxiwtz/mapricorn">
+                        https://github.com/mawxiwtz/mapricorn
+                    </a>
+                </p>
+            </header>
+
+            <main>
+                <section class="stage-wrapper">
+                    <div class="stage-header">
+                        <p>Mapricorn playground</p>
+                    </div>
+                    <div id="stage" class="stage" tabindex="0" aria-label="Map area canvas">
+                        <div id="map-layer" data-empty="true"></div>
+                    </div>
+                </section>
+            </main>
+        </div>
+
+        <script type="module" src="./demo/main.ts"></script>
+    </body>
+</html>

@@ -2,24 +2,16 @@ import { LatLng, type LatLngExpression } from './latlng.js';
 import type { GPXData } from './gpx.js';
 import { Geography } from './geography.js';
 import { Vector2 } from './vector.js';
-
-type PointerInfo = {
-    id: number;
-    x: number;
-    y: number;
-    old?: {
-        x: number;
-        y: number;
-    };
-};
+import { PointerControl, type PointerAction } from './pointer.js';
 
 export type MapricornOptions = {
     container?: HTMLElement;
-    width?: string;
-    height?: string;
     mapSource?: string;
     center?: LatLngExpression;
     zoom?: number;
+    zoomMin?: number;
+    zoomMax?: number;
+    theta?: number;
     enableRotate?: boolean;
     showTileInfo?: boolean;
 };
@@ -27,37 +19,30 @@ export type MapricornOptions = {
 // 地図表示を行うクラス
 export class Mapricorn {
     container?: HTMLElement;
-    width = '';
-    height = '';
     canvas: HTMLCanvasElement;
     canvas2: HTMLCanvasElement;
     mapSource = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-    //mapSource = '/map/osm/{z}/{x}/{y}.png';
     gpxData?: GPXData;
     center: LatLng;
     zoom: number = 2;
     zoomMax = 19;
     zoomMin = 2;
+    theta = 0;
     latMax: number = 0;
     lngMin: number = 0;
     enableRotate: boolean = true;
     showTileInfo = false;
 
     _serial: number = 0;
-    _oldPoint?: { x: number; y: number };
-    _isMoving = false;
     _imageCache: Record<string, HTMLImageElement>;
     _drawing: boolean = false;
-    _pointers: Record<number, PointerInfo>;
-    _shiftL = false;
-    _theta = 0;
+    _pointerControl?: PointerControl;
 
     constructor(opts?: MapricornOptions) {
         this.center = new LatLng([0, 0, 0]);
         this.canvas = document.createElement('canvas');
         this.canvas2 = document.createElement('canvas');
         this._imageCache = {};
-        this._pointers = {};
 
         if (opts) {
             if (opts.mapSource) {
@@ -66,19 +51,22 @@ export class Mapricorn {
             if (opts.center) {
                 this.center = new LatLng(opts.center);
             }
-            if (opts.zoom) {
+            if (opts.zoom != null) {
                 this.setZoom(opts.zoom);
             }
-            if (opts.width) {
-                this.width = opts.width;
+            if (opts.zoomMin != null) {
+                this.zoomMin = opts.zoomMin;
             }
-            if (opts.height) {
-                this.height = opts.height;
+            if (opts.zoomMax != null) {
+                this.zoomMax = opts.zoomMax;
             }
-            if (opts.enableRotate) {
+            if (opts.theta != null) {
+                this.theta = opts.theta;
+            }
+            if (opts.enableRotate != null) {
                 this.enableRotate = opts.enableRotate;
             }
-            if (opts.showTileInfo) {
+            if (opts.showTileInfo != null) {
                 this.showTileInfo = opts.showTileInfo;
             }
             if (opts.container) {
@@ -101,14 +89,20 @@ export class Mapricorn {
         if (!this.container) {
             return;
         }
+
+        this._pointerControl = new PointerControl({
+            container: this.container,
+            onPointerDown: this.handlerPointerDown(),
+            onPointerUp: this.handlerPointerUp(),
+            onGotPointerCapture: this.handlerGotPointerCapture(),
+            onLostPointerCapture: this.handlerLostPointerCapture(),
+            onPointerMove: this.handlerPointerMove(),
+            onWheel: this.handlerWheel(),
+        });
+
         this.container.style.position = 'relative';
         this.container.style.overflow = 'hidden';
-        if (this.width) {
-            this.container.style.width = this.width;
-        }
-        if (this.height) {
-            this.container.style.height = this.height;
-        }
+        this.container.style.cursor = 'grab';
 
         this.canvas = document.createElement('canvas');
         this.canvas.style.position = 'absolute';
@@ -130,19 +124,6 @@ export class Mapricorn {
         this.container.tabIndex = 0; // enable receive key event on element
         this.container.style.outline = 'none'; // not show outline of element when getting focus
         this.container.focus();
-
-        // disable pinch in-out by browser
-        this.container.addEventListener('touchstart', (event) => {
-            event.preventDefault();
-        });
-
-        this.container.addEventListener('pointerdown', this.handlerPointerDown());
-        this.container.addEventListener('pointerup', this.handlerPointerUp());
-        this.container.addEventListener('pointermove', this.handlerPointerMove());
-        this.container.addEventListener('wheel', this.handlerMouseWheel());
-
-        this.container.addEventListener('keydown', this.handlerKeyDown());
-        this.container.addEventListener('keyup', this.handlerKeyUp());
     }
 
     // canvasのリサイズと解像度設定（ぼやけ防止）
@@ -179,8 +160,15 @@ export class Mapricorn {
     // 中心点をこの位置に移動しておくこと。描画後に中心点は表示領域の中心に
     // 再設定される）。省略時はcanvasの中心
     // zoomは新しいズームレベルを指定する。省略時は現在のズームレベル
+    // thetaは回転角（ラジアン）。省略時は現在の回転角
     // easingをfalseにするとズーム変更時もアニメーションしなくなる（ピンチ操作時のUX向上）
-    draw(offsetX?: number, offsetY?: number, zoom: number = this.zoom, easing: boolean = true) {
+    draw(
+        offsetX?: number,
+        offsetY?: number,
+        zoom: number = this.zoom,
+        theta: number = this.theta,
+        easing: boolean = true
+    ) {
         const ease = (func: (progress: number) => void, duration: number, endFunc: () => void) => {
             let start = -1;
             const handler = { id: 0 };
@@ -201,7 +189,7 @@ export class Mapricorn {
 
         const end = () => {
             if (easing && zoom != this.zoom) {
-                this.draw2d(this.canvas, this.center, zoom, 0, offsetX, offsetY);
+                this.draw2d(this.canvas, this.center, zoom, 0, theta, offsetX, offsetY);
             }
 
             // canvasの透明度をリセットする
@@ -213,9 +201,9 @@ export class Mapricorn {
             // this.draw()やthis.moveCenter()をアンロックする
             this._drawing = false;
 
-            // ホイールアクションの場合、中心点がポインタの位置となるため
-            // 中心点と実際の表示の中心がずれる。そのためズーム変更後の新たな
-            // 中心点を計算し、設定する
+            // 回転やズーム時に中心点が指定されている場合、中心点と実際の表示の
+            // 中心がずれる。そのため回転やズーム変更後は新たな中心点を計算し、
+            // 設定する必要がある。
             if (offsetX !== undefined && offsetY !== undefined) {
                 const rx = this.canvas.clientWidth / 2 - offsetX;
                 const ry = this.canvas.clientHeight / 2 - offsetY;
@@ -231,7 +219,7 @@ export class Mapricorn {
         this._drawing = true;
 
         if (!easing || zoom == this.zoom) {
-            this.draw2d(this.canvas, this.center, zoom, 0, offsetX, offsetY);
+            this.draw2d(this.canvas, this.center, zoom, 0, theta, offsetX, offsetY);
             end();
         } else {
             // ズーム倍率変更をイージングつきで行う
@@ -247,20 +235,22 @@ export class Mapricorn {
                         this.center,
                         this.zoom,
                         sign * progress,
+                        theta,
                         offsetX,
-                        offsetY,
+                        offsetY
                     );
                     this.draw2d(
                         this.canvas2,
                         this.center,
                         zoom,
                         -sign * (1 - progress),
+                        theta,
                         offsetX,
-                        offsetY,
+                        offsetY
                     );
                 },
                 300,
-                end,
+                end
             );
         }
     }
@@ -270,8 +260,9 @@ export class Mapricorn {
         center: LatLng,
         zoom: number,
         decimals: number = 0,
+        theta: number,
         offsetX?: number,
-        offsetY?: number,
+        offsetY?: number
     ) {
         // 複数の座標系を扱うためそれぞれの違いに注意
         //   経緯度：グリニッジ/赤道を原点とした度数単位。北東方向が正の数値
@@ -291,10 +282,10 @@ export class Mapricorn {
 
         // canvasの表示範囲のメートル座標
         // zoomレベルでのcanvas四隅のメートル座標（zoomの中心点で逆回転させておく）
-        const pa = new Vector2(-cx, -cy).rotate(-this._theta);
-        const pb = new Vector2(w - cx, -cy).rotate(-this._theta);
-        const pc = new Vector2(w - cx, h - cy).rotate(-this._theta);
-        const pd = new Vector2(-cx, h - cy).rotate(-this._theta);
+        const pa = new Vector2(-cx, -cy).rotate(-theta);
+        const pb = new Vector2(w - cx, -cy).rotate(-theta);
+        const pc = new Vector2(w - cx, h - cy).rotate(-theta);
+        const pd = new Vector2(-cx, h - cy).rotate(-theta);
 
         // zoom中心点のメートル座標
         const center_meter = Geography.degrees2meters(center.lat, center.lng);
@@ -351,7 +342,7 @@ export class Mapricorn {
         ctx.restore();
         ctx.save();
         ctx.translate(cx, cy);
-        ctx.rotate(this._theta);
+        ctx.rotate(theta);
         const putTileText = (x: number, y: number, str: string) => {
             ctx.strokeRect(x, y, tilePixel, tilePixel);
             ctx.fillText(str, x + tilePixel / 2, y + tilePixel / 2);
@@ -526,14 +517,17 @@ export class Mapricorn {
         }
     }
 
-    // 中心点をx,yピクセル分移動する
-    // 移動方向は正の数なら南東方向
+    // 中心点(経緯度)をdx、dyピクセル分移動する
+    // 表示する地図を南東方向に移動したい場合、dx、dyは負数を指定する
     moveCenter(dx: number, dy: number) {
         if (this._drawing) {
             return;
         }
+        if (dx == 0 && dy == 0) {
+            return;
+        }
         const dv = new Vector2(dx, dy);
-        dv.rotate(-this._theta);
+        dv.rotate(-this.theta);
         const mpp = Geography.getMetersPerPixelByZoom(this.zoom);
 
         // 中心経緯度をメートルに直す
@@ -563,28 +557,6 @@ export class Mapricorn {
         this.center.lng = deg.lng;
     }
 
-    start({ offsetX: x, offsetY: y }: MouseEvent | Record<string, number>) {
-        this._isMoving = true;
-        this._oldPoint = { x, y };
-    }
-
-    stop() {
-        this._oldPoint = undefined;
-        this._isMoving = false;
-    }
-
-    // 指定座標に中心点を移動する
-    move({ offsetX: x, offsetY: y }: MouseEvent | Record<string, number>) {
-        if (this._oldPoint) {
-            // ワールド座標の増分を求めて中心点を移動する
-            const dx = this._oldPoint.x - x;
-            const dy = this._oldPoint.y - y;
-            this.moveCenter(dx, dy);
-        }
-
-        this._oldPoint = { x, y };
-    }
-
     handlerResize() {
         return () => {
             this.resize();
@@ -592,230 +564,90 @@ export class Mapricorn {
     }
 
     handlerPointerDown() {
-        return (e: PointerEvent) => {
-            this._pointers[e.pointerId] = {
-                id: e.pointerId,
-                x: e.offsetX,
-                y: e.offsetY,
-            };
-            const element = <HTMLCanvasElement>e.currentTarget;
-            element.setPointerCapture(e.pointerId);
+        return () => {};
+    }
 
-            const pointers = Object.values(this._pointers);
-            if (pointers.length === 1) {
-                // 最初の指ならばタッチ開始
-                this.canvas.style.cursor = 'grab';
-                this.start({
-                    offsetX: pointers[0].x,
-                    offsetY: pointers[0].y,
-                });
+    handlerPointerUp() {
+        return () => {};
+    }
+
+    handlerGotPointerCapture() {
+        return () => {
+            if (this.container) {
+                this.container.style.cursor = 'grabbing';
             }
         };
     }
 
-    handlerPointerUp() {
-        return (e: PointerEvent) => {
-            //e.preventDefault();
-
-            const element = <HTMLCanvasElement>e.currentTarget;
-            element.releasePointerCapture(e.pointerId);
-            delete this._pointers[e.pointerId];
-
-            const pointers = Object.values(this._pointers);
-            if (pointers.length === 0) {
-                // 指がすべて離れた
-                this.stop();
-                this.canvas.style.cursor = '';
+    handlerLostPointerCapture() {
+        return () => {
+            if (this.container) {
+                this.container.style.cursor = 'grab';
             }
         };
     }
 
     handlerPointerMove() {
-        return (e: PointerEvent) => {
-            //e.preventDefault();
-
-            if (!this._isMoving) {
-                return;
-            }
-
-            // ポインタ情報の更新
-            if (e.pointerId in this._pointers) {
-                const v = this._pointers[e.pointerId];
-                v.old = {
-                    x: v.x,
-                    y: v.y,
-                };
-                v.x = e.offsetX;
-                v.y = e.offsetY;
-            } else {
-                this._pointers[e.pointerId] = { id: e.pointerId, x: e.offsetX, y: e.offsetY };
-            }
-
-            // ポインタを古い順にソートして配列化
-            const pointers = Object.values(this._pointers).sort((a, b) => a.id - b.id);
-            if (pointers.length === 0) {
-                return;
-            }
-
-            // １本目のタッチ情報
-            const p0 = pointers[0];
-            if (!p0.old) {
-                return;
-            }
-
-            const w = this.canvas.clientWidth;
-            const h = this.canvas.clientHeight;
-
-            // １本目の移動量
-            // 地図を右下にドラッグした場合、地図の中心を左上に移動することと同じ。
-            const d0 = new Vector2(p0.old.x - p0.x, p0.old.y - p0.y);
-
-            if (pointers.length >= 2) {
-                // マルチタッチ
-                // ２本目のタッチ情報
-                const p1 = pointers[1];
-                if (!p1.old) {
-                    return;
-                }
-
-                // ２本目の移動量
-                const d1 = new Vector2(p1.old.x - p1.x, p1.old.y - p1.y);
-
-                // １本目と２本目の移動量の平均分、中心点をずらす。
-                const dx = (d0.x + d1.x) / 2;
-                const dy = (d0.y + d1.y) / 2;
-
-                // ピンチイン・アウトの最終的な中心位置を求める
-                const rx = (p0.x + p1.x) / 2;
-                const ry = (p0.y + p1.y) / 2;
-                this.moveCenter(rx - w / 2 + dx, ry - h / 2 + dy);
-
-                let z = this.zoom;
-
-                // ピンチイン・アウト
-                // １本目と２本目の移動場所、移動量からズームの変化を計算する
-                const rb = Math.sqrt((p0.old.x - p1.old.x) ** 2 + (p0.old.y - p1.old.y) ** 2);
-                const ra = Math.sqrt((p0.x - p1.x) ** 2 + (p0.y - p1.y) ** 2);
-                const mpp = Geography.getMetersPerPixelByZoom(this.zoom);
-                z = Geography.getZoomByMetersPerPixel((mpp * rb) / ra);
-
-                if (z > this.zoomMax) z = this.zoomMax;
-                if (z < this.zoomMin) z = this.zoomMin;
-
-                if (this.enableRotate && pointers.length >= 3) {
-                    // ３本以上のときのみ回転有効
-                    // ２本のタッチ位置（移動前、移動後）を正規化する
-                    const v00 = new Vector2(p0.old.x / w - 0.5, p0.old.y / h - 0.5);
-                    const v01 = new Vector2(p0.x / w - 0.5, p0.y / h - 0.5);
-                    const v10 = new Vector2(p1.old.x / w - 0.5, p1.old.y / h - 0.5);
-                    const v11 = new Vector2(p1.x / w - 0.5, p1.y / h - 0.5);
-
-                    // ２本指間の中間位置を求める
-                    const c00 = v00.clone().add(v10).div(2);
-                    const c01 = v01.clone().add(v11).div(2);
-
-                    // 地図の中央を円の中心としたベクトルにする
-                    v00.sub(c00);
-                    v10.sub(c00);
-                    v01.sub(c01);
-                    v11.sub(c01);
-
-                    // 各指の回転角を求め、合算を平均したものを地図の回転角とする
-                    const delta0 = v00.angleTo(v01) * (v00.cross(v01) < 0 ? -1 : 1);
-                    const delta1 = v10.angleTo(v11) * (v10.cross(v11) < 0 ? -1 : 1);
-                    const deltaRad = (delta0 + delta1) / 2;
-
-                    let theta = this._theta + deltaRad;
-                    if (theta > Math.PI * 2) theta = theta - Math.PI * 2;
-                    if (theta < -Math.PI * 2) theta = theta + Math.PI * 2;
-                    this._theta = theta;
-                }
-
-                // 描画する
-                this.draw(rx, ry, z, false);
-
-                return;
-            } else {
-                // マウスドラッグ or シングルタッチ
-                if (this.enableRotate && this._shiftL) {
-                    // Shift + ドラッグで地図の回転
-                    const v0 = new Vector2(p0.old.x / w - 0.5, p0.old.y / h - 0.5);
-                    const v1 = new Vector2(p0.x / w - 0.5, p0.y / h - 0.5);
-                    const sign = v0.cross(v1) < 0 ? -1 : 1;
-
-                    let theta = this._theta + v0.angleTo(v1) * sign;
-                    if (theta > Math.PI * 2) theta = theta - Math.PI * 2;
-                    if (theta < -Math.PI * 2) theta = theta + Math.PI * 2;
-                    this._theta = theta;
-
-                    this.draw();
-                } else {
-                    // 地図の移動
-                    if (this._oldPoint) {
-                        const nx = this._oldPoint.x - d0.x;
-                        const ny = this._oldPoint.y - d0.y;
-                        this.move({
-                            offsetX: nx,
-                            offsetY: ny,
-                        });
-                        this.draw();
-                    }
-                }
-                return;
-            }
+        return (e: PointerEvent, pa: PointerAction) => {
+            this._draw(pa);
         };
     }
 
-    handlerMouseWheel() {
-        return (e: WheelEvent) => {
-            // disable wheel action by browser
-            e.preventDefault();
+    handlerWheel() {
+        return (e: WheelEvent, pa: PointerAction) => {
+            this._draw(pa, true);
+        };
+    }
 
-            // ホイール操作開始位置を中心に拡大縮小するために中心点を移動する
-            const x = e.offsetX;
-            const y = e.offsetY;
-            const dx = e.offsetX - this.canvas.clientWidth / 2;
-            const dy = e.offsetY - this.canvas.clientHeight / 2;
-            this.moveCenter(dx, dy);
+    _draw(pa: PointerAction, easing: boolean = false) {
+        if (!this.container) return;
 
-            let z = this.zoom;
-            if (e.deltaY < 0) {
+        // calcurate zoom
+        let z = this.zoom;
+        if (pa.pointersNum > 1) {
+            // multi-touch
+            const mpp = Geography.getMetersPerPixelByZoom(this.zoom);
+            z = Geography.getZoomByMetersPerPixel(mpp * pa.delta.z);
+
+            if (z > this.zoomMax) z = this.zoomMax;
+            if (z < this.zoomMin) z = this.zoomMin;
+        } else {
+            // sigle-touch
+            if (pa.delta.z < 0) {
                 z += 1;
                 if (z > this.zoomMax) z = this.zoomMax;
-            } else if (e.deltaY > 0) {
+            } else if (pa.delta.z > 0) {
                 z += -1;
                 if (z < this.zoomMin) z = this.zoomMin;
-            } else {
-                return;
             }
+        }
 
-            this.draw(x, y, z);
-        };
-    }
+        // move center
+        const wh = this.container.clientWidth / 2;
+        const hh = this.container.clientHeight / 2;
+        // ポインタ座標差分（ポインタ座標と中心点座標との差）
+        const rdx = (pa.center?.x ?? wh) - wh;
+        const rdy = (pa.center?.y ?? hh) - hh;
+        // draw()時に回転やズームがポインタ座標を中心に行われるように
+        // 中心をポインタ座標差分ずらす。
+        // さらにポインタ移動分(pa.delta)逆方向にずらす。
+        this.moveCenter(rdx - pa.delta.x, rdy - pa.delta.y);
 
-    handlerKeyDown() {
-        const keyMap: Record<string, () => void> = {
-            ShiftLeft: () => {
-                this._shiftL = true;
-            },
-        };
+        // set rotate
+        let theta = this.theta + pa.delta.theta;
+        if (theta > Math.PI * 2) theta = theta - Math.PI * 2;
+        if (theta < -Math.PI * 2) theta = theta + Math.PI * 2;
+        this.theta = theta;
 
-        return (e: KeyboardEvent) => {
-            const func = keyMap[e.code];
-            if (func) func();
-        };
-    }
-
-    handlerKeyUp() {
-        const keyMap: Record<string, () => void> = {
-            ShiftLeft: () => {
-                this._shiftL = false;
-            },
-        };
-
-        return (e: KeyboardEvent) => {
-            const func = keyMap[e.code];
-            if (func) func();
-        };
+        // draw
+        if (pa.center) {
+            this.draw(pa.center.x, pa.center.y, z, theta, easing);
+        } else {
+            this.draw(undefined, undefined, z, theta, easing);
+        }
     }
 }
+
+export const create = (opts?: MapricornOptions) => new Mapricorn(opts);
+
+export default Mapricorn;

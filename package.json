@@ -1,48 +1,56 @@
 {
   "name": "mapricorn",
-  "version": "1.1.4",
-  "description": "Mapricorn the Map viewer",
-  "private": true,
-  "type": "module",
+  "version": "1.2.0",
+  "description": "Mapricorn the Map Rendering Engine",
   "license": "MIT",
-  "directories": {
-    "dist": "./dist/"
+  "type": "module",
+  "main": "./dist/mapricorn.cjs",
+  "module": "./dist/mapricorn.esm.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "browser": {
+        "import": "./dist/mapricorn.esm.js",
+        "default": "./dist/mapricorn.umd.js"
+      },
+      "import": "./dist/mapricorn.esm.js",
+      "require": "./dist/mapricorn.cjs",
+      "default": "./dist/mapricorn.esm.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist"
   ],
-  "main": "./dist/lib/cjs/mapricorn.js",
-  "module": "./dist/lib/esm/mapricorn.js",
-  "exports": {
-    ".": {
-      "import": "./dist/lib/esm/mapricorn.js",
-      "require": "./dist/lib/cjs/mapricorn.js",
-      "types": "./dist/lib/types/mapricorn.d.ts"
-    },
-    "./*": {
-      "import": "./dist/lib/esm/*.js",
-      "require": "./dist/lib/cjs/*.js",
-      "types": "./dist/lib/types/*.d.ts"
-    }
-  },
   "scripts": {
-    "lint": "prettier --check . && eslint .",
-    "format": "prettier --write .",
-    "build": "node ./esbuild.js",
-    "postbuild": "tsc --allowJs --declaration --emitDeclarationOnly --outDir ./dist/lib/types",
-    "start": "node ./esbuild.js --serve"
+    "lint": "eslint .",
+    "dev": "vite",
+    "build": "npm run build:lib && npm run build:demo",
+    "build:lib": "vite build && npm run build:types && npm run build:minify",
+    "build:types": "tsc -d --declarationMap --emitDeclarationOnly --noEmit false --outDir ./dist/types src/*.ts",
+    "build:minify": "node scripts/minify.mjs",
+    "build:demo": "vite build --config vite.config.demo.ts",
+    "clean": "rimraf dist",
+    "preview": "vite preview",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "map"
+  ],
+  "author": "mawxiwtz <pekoe@lair.net>",
+  "dependencies": {
+    "@types/node": "^24.10.0",
+    "esbuild": "^0.25.12",
+    "rimraf": "^6.1.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.2"
   },
   "devDependencies": {
-    "@types/eslint": "^8.56.12",
-    "@types/node": "^20.17.14",
-    "@typescript-eslint/eslint-plugin": "^7.18.0",
-    "@typescript-eslint/parser": "^7.18.0",
-    "chalk": "^5.4.1",
-    "esbuild": "^0.20.2",
-    "eslint": "^8.57.1",
-    "eslint-config-prettier": "^9.1.0",
-    "fs-extra": "^11.3.0",
-    "prettier": "^3.4.2",
-    "typescript": "^5.7.3"
+    "@eslint/js": "^9.39.1",
+    "eslint": "^9.39.1",
+    "globals": "^16.5.0",
+    "jiti": "^2.6.1",
+    "typescript-eslint": "^8.46.3"
   }
 }

@@ -14,10 +14,10 @@ npm install https://github.com/mawxiwtz/mapricorn
 
 ### JavaScript (Browser)
 
-Copy "maprincorn.min.js" from the dist directory and load it inside your HTML file:
+Copy "maprincorn.umd.js" from the dist directory and load it inside your HTML file:
 
 ```
-<script lang="javascript" src="./mapricorn.min.js"></script>
+<script lang="javascript" src="./mapricorn.umd.js"></script>
 ```
 
 And place one tag for map display:
@@ -29,10 +29,8 @@ And place one tag for map display:
 Then, specify the display location etc. in javascript as follows:
 
 ```
-const mapr = Mapricorn({
+const mapr = Mapricorn.create({
     container: maparea,
-    width: '500px',
-    height: '400px',
     mapSource: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
     center: { lat: 0, lng: 0 },
     zoom: 3,
@@ -48,7 +46,17 @@ you can now do this:
 import { Mapricorn } from 'mapricorn';
 ```
 
-The rest is the same as with JavaScript.
+Then, specify the display location etc. in javascript as follows:
+
+```
+const mapr = new Mapricorn({
+    container: maparea,
+    mapSource: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    center: { lat: 0, lng: 0 },
+    zoom: 3,
+});
+mapr.draw();
+```
 
 ## License
 

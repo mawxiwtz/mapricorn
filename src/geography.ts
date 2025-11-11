@@ -1,4 +1,4 @@
-export const R = 6378137; // 地球の赤道半径(m)
+export const R = 6378136.6; // 地球の赤道半径(m)
 export const TILE_PIXEL = 256; // タイル1辺のピクセル数
 
 export class Geography {
@@ -66,5 +66,41 @@ export class Geography {
     // 指定ズームレベルにおける1pxあたりのメートルを計算
     static getMetersPerPixelByZoom(zoom: number) {
         return (2 * R * Math.PI) / (2 ** zoom * TILE_PIXEL);
+    }
+
+    // 経緯度座標 (r,θ,φ) から地表面の3D座標 (x,y,z) への変換
+    // 一般的な直交直線座標と球面座標変換とは異なるため注意
+    // r, x, y, z: WebGL World座標上のmeter、r > 0
+    // θ: 緯度 (-90 ～ 90)
+    // φ: 経度 (-180 ～ 180)
+    static degrees2xyz({ r, lat, lng }: { r: number; lat: number; lng: number }) {
+        // 半径、経緯度 → 3D座標
+        //   x =  r * sinφ * cosθ
+        //   y =  r * sinθ
+        //   z =  r * cosφ * cosθ
+        const radLat = (lat * Math.PI) / 180;
+        const radLng = (lng * Math.PI) / 180;
+        const x = r * Math.sin(radLng) * Math.cos(radLat);
+        const y = r * Math.sin(radLat);
+        const z = r * Math.cos(radLng) * Math.cos(radLat);
+        return { x, y, z };
+    }
+
+    // 地表面の3D座標 (x,y,z) から経緯度座標 (r,θ,φ) への変換
+    // 一般的な直交直線座標と球面座標変換とは異なるため注意
+    // r, x, y, z: WebGL World座標上のmeter、r > 0
+    // θ: 緯度 (-90 ～ 90)
+    // φ: 経度 (-180 ～ 180)
+    static xyz2degrees({ x, y, z }: { x: number; y: number; z: number }) {
+        // 3D座標 -> 半径、経緯度
+        //   r = sqrt(x^2 + y^2 + z^2)
+        //   sinθ = y / r
+        //   cosφ = x / sqrt(x^2 + z^2)  (xz平面上の角度φ三角形から)
+        // lat = θ * 180 / π = (arcsin(y / r) * 180) / π
+        // lng = φ * 180 / π = (sgn(z) * arccos(x / sqrt(x^2 + z^2))  * 180) / π
+        const r = Math.sqrt(x ** 2 + y ** 2 + z ** 2);
+        const lat = (Math.asin(y / r) * 180) / Math.PI;
+        const lng = (Math.sign(x) * Math.acos(z / Math.sqrt(x ** 2 + z ** 2)) * 180) / Math.PI;
+        return { r, lat, lng };
     }
 }

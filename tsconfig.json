@@ -1,17 +1,21 @@
 {
   "compilerOptions": {
-    "target": "esnext",
-    "module": "esnext",
-    "rootDir": "./src",
-    "allowJs": true,
-    "checkJs": true,
-    "isolatedModules": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "sourceMap": true,
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["DOM", "DOM.Iterable", "ES2020"],
     "strict": true,
-    "outDir": "./dist",
-    "moduleResolution": "bundler"
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "types": ["vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "@mapricorn": ["src/index.ts"],
+      "@mapricorn/*": ["src/*"]
+    }
   },
-  "include": ["./src/**/*.ts"]
+  "include": ["src", "demo", "tests", "vite.config.ts"]
 }

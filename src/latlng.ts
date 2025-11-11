@@ -30,7 +30,7 @@ export class LatLng {
             throw new Error('Invalid parameters');
         }
         if (a === undefined || a === null) {
-            return a;
+            throw new Error('Invalid parameters');
         }
         if (typeof a === 'object' && 'lat' in a) {
             // ({lat: x, lng: y, ati: z})
