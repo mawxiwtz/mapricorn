@@ -1,0 +1,56 @@
+{
+  "name": "mapricorn",
+  "version": "1.0.0",
+  "description": "Mapricorn the Map Rendering Engine",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/mapricorn.cjs",
+  "module": "./dist/mapricorn.esm.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "browser": {
+        "import": "./dist/mapricorn.esm.js",
+        "default": "./dist/mapricorn.umd.js"
+      },
+      "import": "./dist/mapricorn.esm.js",
+      "require": "./dist/mapricorn.cjs",
+      "default": "./dist/mapricorn.esm.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "lint": "eslint .",
+    "dev": "vite",
+    "build": "npm run build:lib && npm run build:demo",
+    "build:lib": "vite build && npm run build:types && npm run build:minify",
+    "build:types": "tsc -d --declarationMap --emitDeclarationOnly --noEmit false --outDir ./dist/types src/*.ts",
+    "build:minify": "node scripts/minify.mjs",
+    "build:demo": "vite build --config vite.config.demo.ts",
+    "clean": "rimraf dist",
+    "preview": "vite preview",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "map"
+  ],
+  "author": "mawxiwtz <pekoe@lair.net>",
+  "dependencies": {
+    "@types/node": "^25.3.1",
+    "esbuild": "^0.27.3",
+    "rimraf": "^6.1.3",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.0.2",
+    "globals": "^17.3.0",
+    "jiti": "^2.6.1",
+    "typescript-eslint": "^8.56.1"
+  }
+}

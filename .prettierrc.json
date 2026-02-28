@@ -1,0 +1,37 @@
+{
+  "useTabs": false,
+  "tabWidth": 4,
+  "endOfLine": "lf",
+  "singleQuote": true,
+  "printWidth": 100,
+  "bracketSpacing": true,
+  "overrides": [
+    {
+      "files": "*.ts",
+      "options": {
+        "semi": true
+      }
+    },
+    {
+      "files": ["*.json"],
+      "options": {
+        "tabWidth": 2
+      }
+    },
+    {
+      "files": ["*.css"],
+      "options": {
+        "tabWidth": 2,
+        "printWidth": 120,
+        "htmlWhitespaceSensitivity": "css"
+      }
+    },
+    {
+      "files": "*.html",
+      "options": {
+        "bracketSameLine": true,
+        "htmlWhitespaceSensitivity": "ignore"
+      }
+    }
+  ]
+}
